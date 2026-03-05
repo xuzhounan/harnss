@@ -22,7 +22,7 @@ import { log } from "./lib/logger";
 import { migrateFromOpenAcpUi } from "./lib/migration";
 import { glassEnabled, liquidGlass } from "./lib/glass";
 import { initAutoUpdater, getIsInstallingUpdate } from "./lib/updater";
-import { initPostHog, shutdownPostHog } from "./lib/posthog";
+import { initPostHog, shutdownPostHog, reinitPostHog } from "./lib/posthog";
 import { sessions } from "./ipc/claude-sessions";
 import { acpSessions } from "./ipc/acp-sessions";
 import { terminals } from "./ipc/terminal";
@@ -42,6 +42,7 @@ import * as acpSessionsIpc from "./ipc/acp-sessions";
 import * as codexSessionsIpc from "./ipc/codex-sessions";
 import * as mcpIpc from "./ipc/mcp";
 import * as settingsIpc from "./ipc/settings";
+import { onSettingsChanged } from "./ipc/settings";
 
 // --- Performance: Chromium/V8 flags (must be set before app.whenReady()) ---
 app.commandLine.appendSwitch("enable-gpu-rasterization"); // force GPU raster for all content
@@ -175,8 +176,6 @@ mcpIpc.register();
 settingsIpc.register();
 
 // Listen for analytics settings changes and reinitialize PostHog
-import { onSettingsChanged } from "./ipc/settings";
-import { reinitPostHog } from "./lib/posthog";
 onSettingsChanged((settings) => {
   // Reinitialize PostHog when analytics settings change
   if ("analyticsEnabled" in settings) {

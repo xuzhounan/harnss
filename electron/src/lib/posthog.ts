@@ -36,22 +36,24 @@ export async function initPostHog(): Promise<void> {
   userId = generateUserId();
 
   try {
+    // Check if API key is configured
+    const apiKey = process.env.POSTHOG_API_KEY;
+    if (!apiKey || apiKey === "phc_placeholder_key_replace_with_real_key") {
+      console.warn("PostHog API key not configured - analytics will be disabled");
+      return;
+    }
+
     // Lazy-load posthog-node (ESM package)
     const posthogModule = await import("posthog-node");
     PostHog = posthogModule.default;
 
     // Initialize client with public PostHog project
-    client = new PostHog(
-      // This is a placeholder - replace with actual PostHog project API key
-      // Or load from env var: process.env.POSTHOG_API_KEY
-      "phc_placeholder_key_replace_with_real_key",
-      {
-        host: "https://us.i.posthog.com",
-        // Flush events every 10 seconds or 20 events, whichever comes first
-        flushAt: 20,
-        flushInterval: 10000,
-      }
-    );
+    client = new PostHog(apiKey, {
+      host: "https://us.i.posthog.com",
+      // Flush events every 10 seconds or 20 events, whichever comes first
+      flushAt: 20,
+      flushInterval: 10000,
+    });
 
     // Track app start event
     await captureEvent("app_started", {
