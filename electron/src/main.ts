@@ -68,8 +68,8 @@ function createWindow(): void {
   const windowOptions: Electron.BrowserWindowConstructorOptions = {
     width: 1200,
     height: 800,
-    // Matches the renderer's stricter flat-layout minimum before first IPC sync.
-    minWidth: 1600,
+    // Matches the renderer's stricter island-layout minimum before first IPC sync.
+    minWidth: 1664,
     minHeight: 600,
     // Packaged builds get the icon from the .app bundle / electron-builder config
     ...(!app.isPackaged && { icon: path.join(__dirname, "../../build/icon.png") }),
