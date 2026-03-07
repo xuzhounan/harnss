@@ -1,3 +1,5 @@
+import type { ToolUseResult } from "@/types";
+
 interface AskUserQuestion {
   id?: string;
   question: string;
@@ -36,10 +38,35 @@ export function getAskUserQuestionKey(question: AskUserQuestion, index: number):
   return id || `question-${index}`;
 }
 
+export function buildAskUserQuestionResult(
+  questions: AskUserQuestion[],
+  selections: Record<string, Set<string>>,
+  freeText: Record<string, string>,
+): Pick<ToolUseResult, "answers" | "answersByQuestionId"> {
+  const answers: Record<string, string> = {};
+  const answersByQuestionId: Record<string, string[]> = {};
+
+  for (const [index, question] of questions.entries()) {
+    const questionKey = getAskUserQuestionKey(question, index);
+    const custom = freeText[questionKey]?.trim();
+    if (custom) {
+      answers[question.question] = custom;
+      answersByQuestionId[questionKey] = [custom];
+      continue;
+    }
+
+    const selected = [...(selections[questionKey] ?? [])];
+    answers[question.question] = selected.join(", ");
+    answersByQuestionId[questionKey] = selected;
+  }
+
+  return { answers, answersByQuestionId };
+}
+
 export function getAskUserQuestionAnswer(
   question: AskUserQuestion,
   index: number,
-  toolResult?: Record<string, unknown>,
+  toolResult?: Pick<ToolUseResult, "answers" | "answersByQuestionId">,
 ): string {
   const answers = asRecord(toolResult?.answers);
   const answersByQuestionId = asRecord(toolResult?.answersByQuestionId);

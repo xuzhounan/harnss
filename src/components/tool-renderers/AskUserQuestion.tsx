@@ -1,5 +1,5 @@
 import { Loader2 } from "lucide-react";
-import { getAskUserQuestionAnswer } from "@/lib/ask-user-question";
+import { getAskUserQuestionAnswer, getAskUserQuestionKey } from "@/lib/ask-user-question";
 import type { UIMessage } from "@/types";
 
 interface AskQuestionOption {
@@ -23,7 +23,7 @@ export function AskUserQuestionContent({ message }: { message: UIMessage }) {
     <div className="space-y-2 text-xs">
       {questions.map((q, qi) => (
         <div
-          key={q.question}
+          key={getAskUserQuestionKey(q, qi)}
           className={qi > 0 ? "border-t border-border/40 pt-2" : ""}
         >
           <span className="text-[13px] text-foreground/80 leading-snug">

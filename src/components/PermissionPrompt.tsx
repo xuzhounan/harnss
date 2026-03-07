@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ShieldAlert, Check, X, Send, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { getAskUserQuestionKey } from "@/lib/ask-user-question";
+import { buildAskUserQuestionResult, getAskUserQuestionKey } from "@/lib/ask-user-question";
 import type { PermissionRequest, RespondPermissionFn } from "@/types";
 
 const TOOL_LABELS: Record<string, string> = {
@@ -156,20 +156,7 @@ function AskUserQuestionPrompt({ request, onRespond }: PermissionPromptProps) {
   };
 
   const handleSubmit = () => {
-    const answers: Record<string, string> = {};
-    const answersByQuestionId: Record<string, string[]> = {};
-    for (const [index, q] of questions.entries()) {
-      const questionKey = getAskUserQuestionKey(q, index);
-      const custom = freeText[questionKey]?.trim();
-      if (custom) {
-        answers[q.question] = custom;
-        answersByQuestionId[questionKey] = [custom];
-      } else {
-        const selected = [...(selections[questionKey] ?? [])];
-        answers[q.question] = selected.join(", ");
-        answersByQuestionId[questionKey] = selected;
-      }
-    }
+    const { answers, answersByQuestionId } = buildAskUserQuestionResult(questions, selections, freeText);
     onRespond("allow", {
       questions: request.toolInput.questions,
       answers,

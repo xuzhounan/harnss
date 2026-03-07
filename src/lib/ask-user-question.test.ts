@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getAskUserQuestionAnswer, getAskUserQuestionKey } from "./ask-user-question";
+import { buildAskUserQuestionResult, getAskUserQuestionAnswer, getAskUserQuestionKey } from "./ask-user-question";
 
 describe("getAskUserQuestionKey", () => {
   it("uses a fallback key when Claude questions do not provide ids", () => {
@@ -13,6 +13,21 @@ describe("getAskUserQuestionKey", () => {
 });
 
 describe("getAskUserQuestionAnswer", () => {
+  it("reads answers keyed by fallback question ids when Claude questions have no ids", () => {
+    const answer = getAskUserQuestionAnswer(
+      { question: "Second question?" },
+      1,
+      {
+        answersByQuestionId: {
+          "question-0": ["Alpha"],
+          "question-1": ["Beta"],
+        },
+      },
+    );
+
+    expect(answer).toBe("Beta");
+  });
+
   it("reads answers keyed by question id", () => {
     const answer = getAskUserQuestionAnswer(
       { id: "q-1", question: "Pick one" },
@@ -69,5 +84,59 @@ describe("getAskUserQuestionAnswer", () => {
     );
 
     expect(answer).toBe("One, Two");
+  });
+});
+
+describe("buildAskUserQuestionResult", () => {
+  it("keeps answers separate for multiple Claude questions without ids", () => {
+    const result = buildAskUserQuestionResult(
+      [
+        { question: "First question?" },
+        { question: "Second question?" },
+      ],
+      {
+        "question-0": new Set(["Alpha"]),
+        "question-1": new Set(["Beta"]),
+      },
+      {},
+    );
+
+    expect(result).toEqual({
+      answers: {
+        "First question?": "Alpha",
+        "Second question?": "Beta",
+      },
+      answersByQuestionId: {
+        "question-0": ["Alpha"],
+        "question-1": ["Beta"],
+      },
+    });
+  });
+
+  it("prefers free text over selected options for the matching question only", () => {
+    const result = buildAskUserQuestionResult(
+      [
+        { question: "First question?" },
+        { question: "Second question?" },
+      ],
+      {
+        "question-0": new Set(["Alpha"]),
+        "question-1": new Set(["Beta"]),
+      },
+      {
+        "question-1": "Custom answer",
+      },
+    );
+
+    expect(result).toEqual({
+      answers: {
+        "First question?": "Alpha",
+        "Second question?": "Custom answer",
+      },
+      answersByQuestionId: {
+        "question-0": ["Alpha"],
+        "question-1": ["Custom answer"],
+      },
+    });
   });
 });
