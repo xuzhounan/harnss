@@ -78,15 +78,15 @@ function generateUserId(): string {
   const settings = getAppSettings();
 
   // Use existing ID if present
-  if ((settings as any).analyticsUserId) {
-    return (settings as any).analyticsUserId;
+  if (settings.analyticsUserId) {
+    return settings.analyticsUserId;
   }
 
   // Generate new anonymous ID
   const newId = randomUUID();
 
   // Persist to settings
-  setAppSettings({ analyticsUserId: newId } as any);
+  setAppSettings({ analyticsUserId: newId });
 
   return newId;
 }
