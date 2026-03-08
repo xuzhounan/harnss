@@ -57,9 +57,9 @@ export function SessionItem({
     <div className="group relative">
       <button
         onClick={onSelect}
-        className={`flex w-full min-w-0 items-center gap-2.5 rounded-lg ps-4 pe-8 py-1.5 text-start text-[13px] font-medium transition-all ${
+        className={`session-item-button flex w-full min-w-0 items-center gap-2.5 rounded-lg ps-4 pe-8 py-1.5 text-start text-[13px] font-medium transition-all ${
           isActive
-            ? "bg-primary/10 text-primary dark:bg-primary/15"
+            ? "session-item-active bg-primary/10 text-black dark:bg-primary/15 dark:text-primary"
             : "text-sidebar-foreground/75 hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/5"
         }`}
       >
@@ -70,12 +70,12 @@ export function SessionItem({
             <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
           </span>
         ) : session.isProcessing ? (
-          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-sidebar-foreground/60" />
+          <Loader2 className={`h-3 w-3 shrink-0 animate-spin ${isActive ? "text-current opacity-80" : "text-sidebar-foreground/60"}`} />
         ) : (
-          <MessageSquare className="h-3 w-3 shrink-0 text-sidebar-foreground/50" />
+          <MessageSquare className={`h-3 w-3 shrink-0 ${isActive ? "text-current opacity-80" : "text-sidebar-foreground/50"}`} />
         )}
         {session.titleGenerating ? (
-          <span className="text-sidebar-foreground/60 italic">Generating title...</span>
+          <span className={isActive ? "text-current opacity-80 italic" : "text-sidebar-foreground/60 italic"}>Generating title...</span>
         ) : (
           <span className="min-w-0 truncate">{session.title}</span>
         )}

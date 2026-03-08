@@ -75,6 +75,7 @@ export function ProjectSection({
   project,
   sessions,
   activeSessionId,
+  jiraBoardEnabled,
   isJiraBoardOpen,
   onNewChat,
   onToggleJiraBoard,
@@ -93,6 +94,7 @@ export function ProjectSection({
   project: Project;
   sessions: ChatSession[];
   activeSessionId: string | null;
+  jiraBoardEnabled: boolean;
   isJiraBoardOpen: boolean;
   onNewChat: () => void;
   onToggleJiraBoard: () => void;
@@ -201,19 +203,21 @@ export function ProjectSection({
           <span className="min-w-0 truncate">{project.name}</span>
         </button>
 
-        <Button
-          variant="ghost"
-          size="icon"
-          className={`h-7 w-7 rounded-lg shrink-0 transition-all ${
-            isJiraBoardOpen
-              ? "bg-black/10 text-sidebar-foreground dark:bg-white/15"
-              : "text-sidebar-foreground/50 hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
-          }`}
-          onClick={onToggleJiraBoard}
-          title="Open Jira board"
-        >
-          <KanbanSquare className="h-4 w-4" />
-        </Button>
+        {jiraBoardEnabled && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className={`h-7 w-7 rounded-lg shrink-0 transition-all ${
+              isJiraBoardOpen
+                ? "bg-black/10 text-sidebar-foreground dark:bg-white/15"
+                : "text-sidebar-foreground/50 hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
+            }`}
+            onClick={onToggleJiraBoard}
+            title="Open Jira board"
+          >
+            <KanbanSquare className="h-4 w-4" />
+          </Button>
+        )}
 
         <Button
           variant="ghost"

@@ -56,7 +56,7 @@ export function AppLayout() {
     activeProjectId, activeProjectPath, showThinking,
     hasProjects, hasRightPanel, hasToolsColumn,
     activeTodos, bgAgents, hasTodos, hasAgents, availableContextual,
-    glassSupported, devFillEnabled,
+    glassSupported, devFillEnabled, jiraBoardEnabled,
     showSettings, setShowSettings,
     spaceCreatorOpen, setSpaceCreatorOpen, editingSpace,
     scrollToMessageId, setScrollToMessageId,
@@ -117,7 +117,9 @@ export function AppLayout() {
   }, []);
 
   const [jiraBoardBySpace, setJiraBoardBySpace] = useState<Record<string, string>>(() => readJiraBoardBySpace());
-  const jiraBoardProjectId = jiraBoardBySpace[spaceManager.activeSpaceId] ?? null;
+  const jiraBoardProjectId = jiraBoardEnabled
+    ? (jiraBoardBySpace[spaceManager.activeSpaceId] ?? null)
+    : null;
   const jiraBoardProject = jiraBoardProjectId
     ? projectManager.projects.find((project) => project.id === jiraBoardProjectId) ?? null
     : null;
@@ -243,6 +245,15 @@ Link: ${issue.url}`;
     handleSend(pendingJiraTask.message);
   }, [activeProjectId, handleSend, manager.activeSessionId, pendingJiraTask]);
 
+  useEffect(() => {
+    if (jiraBoardEnabled) return;
+    setJiraBoardBySpace((prev) => {
+      if (Object.keys(prev).length === 0) return prev;
+      localStorage.removeItem(JIRA_BOARD_BY_SPACE_KEY);
+      return {};
+    });
+  }, [jiraBoardEnabled]);
+
   const isIsland = settings.islandLayout;
   const minChatWidth = getMinChatWidth(isIsland);
   const splitGap = isIsland ? 4 : 0.5;
@@ -320,6 +331,7 @@ Link: ${issue.url}`;
         sessions={manager.sessions}
         activeSessionId={manager.activeSessionId}
         jiraBoardProjectId={jiraBoardProjectId}
+        jiraBoardEnabled={jiraBoardEnabled}
         onNewChat={handleSidebarNewChat}
         onToggleProjectJiraBoard={handleToggleProjectJiraBoard}
         onSelectSession={handleSidebarSelectSession}
