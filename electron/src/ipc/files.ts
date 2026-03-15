@@ -354,6 +354,11 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
             // Then add all files in the folder with their content
             for (const file of matchingFiles) {
               const fileAbsPath = path.resolve(cwd, file);
+              const projectRoot = path.resolve(cwd);
+              if (!fileAbsPath.startsWith(projectRoot + path.sep) && fileAbsPath !== projectRoot) {
+                results.push({ path: file, error: "Path outside project directory" });
+                continue;
+              }
               try {
                 const fileStat = fs.statSync(fileAbsPath);
                 if (!fileStat.isDirectory()) {
