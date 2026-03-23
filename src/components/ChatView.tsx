@@ -12,6 +12,7 @@ import { TurnChangesSummary } from "./TurnChangesSummary";
 import { extractTurnSummaries } from "@/lib/turn-changes";
 import type { TurnSummary } from "@/lib/turn-changes";
 import { computeToolGroups, type ToolGroup, type ToolGroupInfo } from "@/lib/tool-groups";
+import { computeAssistantTurnDividerLabels } from "@/lib/assistant-turn-divider";
 import { TextShimmer } from "@/components/ui/text-shimmer";
 import { ChatUiStateProvider } from "@/components/chat-ui-state";
 import {
@@ -23,6 +24,7 @@ import {
 } from "@/lib/chat-scroll";
 import { CHAT_CONTENT_RESIZED_EVENT } from "@/lib/events";
 import { estimateRowHeight } from "@/lib/chat-virtualization";
+import { CHAT_ROW_CLASS } from "@/components/lib/chat-layout";
 
 // ── Row model ──
 
@@ -131,7 +133,11 @@ interface ChatMessageRowProps {
   row: RowDescriptor;
   showThinking: boolean;
   autoExpandTools: boolean;
+  expandEditToolCallsByDefault: boolean;
+  showToolIcons: boolean;
+  coloredToolIcons: boolean;
   animatingGroupKeys: Set<string>;
+  assistantTurnDividerLabels: Map<string, string>;
   continuationIds: Set<string>;
   sendNextId?: string | null;
   onRevert?: (checkpointId: string) => void;
@@ -144,7 +150,11 @@ const ChatMessageRow = memo(function ChatMessageRow({
   row,
   showThinking,
   autoExpandTools,
+  expandEditToolCallsByDefault,
+  showToolIcons,
+  coloredToolIcons,
   animatingGroupKeys,
+  assistantTurnDividerLabels,
   continuationIds,
   sendNextId,
   onRevert,
@@ -154,7 +164,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
 }: ChatMessageRowProps) {
   if (row.kind === "processing") {
     return (
-      <div className="flex justify-start px-4 py-1.5">
+      <div className={`flex justify-start ${CHAT_ROW_CLASS}`}>
         <div className="flex items-center gap-1.5 text-xs">
           <Minus className="h-3 w-3 text-foreground/40" />
           <TextShimmer as="span" className="italic opacity-60" duration={1.8} spread={1.5}>
@@ -179,6 +189,9 @@ const ChatMessageRow = memo(function ChatMessageRow({
           messages={row.group.messages}
           showThinking={showThinking}
           autoExpandTools={autoExpandTools}
+          expandEditToolCallsByDefault={expandEditToolCallsByDefault}
+          showToolIcons={showToolIcons}
+          coloredToolIcons={coloredToolIcons}
           disableCollapseAnimation
           animate={isNewGroup}
         />
@@ -204,6 +217,9 @@ const ChatMessageRow = memo(function ChatMessageRow({
         <ToolCall
           message={msg}
           autoExpandTools={autoExpandTools}
+          expandEditToolCallsByDefault={expandEditToolCallsByDefault}
+          showToolIcons={showToolIcons}
+          coloredToolIcons={coloredToolIcons}
           disableCollapseAnimation
         />
       </div>
@@ -215,6 +231,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
       <MessageBubble
         message={msg}
         showThinking={showThinking}
+        assistantTurnDividerLabel={assistantTurnDividerLabels.get(msg.id)}
         isContinuation={continuationIds.has(msg.id)}
         isSendNextQueued={sendNextId === msg.id}
         onRevert={onRevert}
@@ -228,7 +245,11 @@ const ChatMessageRow = memo(function ChatMessageRow({
   prev.row === next.row &&
   prev.showThinking === next.showThinking &&
   prev.autoExpandTools === next.autoExpandTools &&
+  prev.expandEditToolCallsByDefault === next.expandEditToolCallsByDefault &&
+  prev.showToolIcons === next.showToolIcons &&
+  prev.coloredToolIcons === next.coloredToolIcons &&
   prev.animatingGroupKeys === next.animatingGroupKeys &&
+  prev.assistantTurnDividerLabels === next.assistantTurnDividerLabels &&
   prev.continuationIds === next.continuationIds &&
   prev.sendNextId === next.sendNextId &&
   prev.onRevert === next.onRevert &&
@@ -246,6 +267,9 @@ interface ChatViewProps {
   autoGroupTools: boolean;
   avoidGroupingEdits: boolean;
   autoExpandTools: boolean;
+  expandEditToolCallsByDefault: boolean;
+  showToolIcons: boolean;
+  coloredToolIcons: boolean;
   extraBottomPadding?: boolean;
   scrollToMessageId?: string;
   onScrolledToMessage?: () => void;
@@ -342,7 +366,7 @@ export const ChatView = memo(function ChatView(props: ChatViewProps) {
 
 function ChatViewContent({
   messages, isProcessing, showThinking, autoGroupTools, avoidGroupingEdits,
-  autoExpandTools, extraBottomPadding, scrollToMessageId, onScrolledToMessage,
+  autoExpandTools, expandEditToolCallsByDefault, showToolIcons, coloredToolIcons, extraBottomPadding, scrollToMessageId, onScrolledToMessage,
   sessionId, onRevert, onFullRevert, onTopScrollProgress,
   onSendQueuedNow, onUnqueueQueuedMessage, sendNextId,
 }: ChatViewProps) {
@@ -432,6 +456,7 @@ function ChatViewContent({
   const prevMsgStructureRef = useRef<{ length: number; lastId: string | undefined; lastToolResultCount: number }>({ length: 0, lastId: undefined, lastToolResultCount: 0 });
   const cachedTurnSummaryRef = useRef<Map<number, TurnSummary>>(new Map());
   const cachedToolGroupsRef = useRef<ToolGroupInfo>(EMPTY_TOOL_GROUP_INFO);
+  const cachedAssistantTurnDividersRef = useRef<Map<string, string>>(new Map());
   const prevIsProcessingRef = useRef(isProcessing);
   const prevAutoGroupRef = useRef(autoGroupTools);
   const prevAvoidEditRef = useRef(avoidGroupingEdits);
@@ -469,6 +494,15 @@ function ChatViewContent({
     cachedTurnSummaryRef.current = map;
     return map;
   }, [nonQueuedMessages, isProcessing, structureChanged, msgStructure]);
+
+  const assistantTurnDividerLabels = useMemo(() => {
+    if (!structureChanged && cachedAssistantTurnDividersRef.current.size >= 0) {
+      return cachedAssistantTurnDividersRef.current;
+    }
+    const map = computeAssistantTurnDividerLabels(nonQueuedMessages, isProcessing);
+    cachedAssistantTurnDividersRef.current = map;
+    return map;
+  }, [nonQueuedMessages, isProcessing, structureChanged]);
 
   // ── Tool groups (js-index-maps, js-set-map-lookups) ──
   const { groups: toolGroups, groupedIndices } = useMemo(() => {
@@ -851,7 +885,11 @@ function ChatViewContent({
                 row={row}
                 showThinking={showThinking}
                 autoExpandTools={autoExpandTools}
+                expandEditToolCallsByDefault={expandEditToolCallsByDefault}
+                showToolIcons={showToolIcons}
+                coloredToolIcons={coloredToolIcons}
                 animatingGroupKeys={animatingGroupKeys}
+                assistantTurnDividerLabels={assistantTurnDividerLabels}
                 continuationIds={continuationIds}
                 sendNextId={sendNextId}
                 onRevert={onRevert}

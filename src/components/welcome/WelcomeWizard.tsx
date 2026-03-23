@@ -23,6 +23,8 @@ interface WelcomeWizardProps {
   onAutoGroupToolsChange: (enabled: boolean) => void;
   autoExpandTools: boolean;
   onAutoExpandToolsChange: (enabled: boolean) => void;
+  expandEditToolCallsByDefault: boolean;
+  onExpandEditToolCallsByDefaultChange: (enabled: boolean) => void;
   transparency: boolean;
   onTransparencyChange: (enabled: boolean) => void;
   glassSupported: boolean;
@@ -62,6 +64,8 @@ export function WelcomeWizard({
   onAutoGroupToolsChange,
   autoExpandTools,
   onAutoExpandToolsChange,
+  expandEditToolCallsByDefault,
+  onExpandEditToolCallsByDefaultChange,
   transparency,
   onTransparencyChange,
   glassSupported,
@@ -187,6 +191,8 @@ export function WelcomeWizard({
                   onAutoGroupToolsChange={onAutoGroupToolsChange}
                   autoExpandTools={autoExpandTools}
                   onAutoExpandToolsChange={onAutoExpandToolsChange}
+                  expandEditToolCallsByDefault={expandEditToolCallsByDefault}
+                  onExpandEditToolCallsByDefaultChange={onExpandEditToolCallsByDefaultChange}
                   transparency={transparency}
                   onTransparencyChange={onTransparencyChange}
                   glassSupported={glassSupported}

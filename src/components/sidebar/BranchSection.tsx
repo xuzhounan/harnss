@@ -43,7 +43,7 @@ export function BranchSection({
   const [expanded, setExpanded] = useState(true);
 
   return (
-    <div className="mb-2">
+    <div>
       {/* Branch header */}
       <button
         onClick={() => setExpanded(!expanded)}

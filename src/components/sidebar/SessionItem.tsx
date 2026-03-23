@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import {
   Columns2,
   Pencil,
@@ -30,7 +30,6 @@ import {
 } from "@/lib/sidebar-dnd";
 
 export function SessionItem({
-  islandLayout,
   session,
   isActive,
   onSelect,
@@ -63,6 +62,9 @@ export function SessionItem({
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(session.title);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuAlign, setMenuAlign] = useState<"start" | "end">("end");
+  const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
+  const rowRef = useRef<HTMLDivElement>(null);
 
   const handleRename = () => {
     const trimmed = editTitle.trim();
@@ -87,6 +89,29 @@ export function SessionItem({
     clearSidebarDragPayload();
   }, []);
 
+  const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const rowRect = rowRef.current?.getBoundingClientRect();
+    setMenuPos({
+      x: rowRect ? e.clientX - rowRect.left : 0,
+      y: rowRect ? e.clientY - rowRect.top : 0,
+    });
+    setMenuAlign("start");
+    setMenuOpen(true);
+  }, []);
+
+  const handleMenuButtonClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    const rowRect = rowRef.current?.getBoundingClientRect();
+    const buttonRect = e.currentTarget.getBoundingClientRect();
+    setMenuPos({
+      x: rowRect ? buttonRect.right - rowRect.left : 0,
+      y: rowRect ? buttonRect.bottom - rowRect.top : 0,
+    });
+    setMenuAlign("end");
+    setMenuOpen(true);
+  }, []);
+
   if (isEditing) {
     return (
       <div className="flex items-center gap-1 px-1 ps-2">
@@ -109,14 +134,12 @@ export function SessionItem({
 
   return (
     <div
+      ref={rowRef}
       className="group relative"
       draggable
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        setMenuOpen(true);
-      }}
+      onContextMenu={handleContextMenu}
     >
       <button
         onClick={onSelect}
@@ -166,94 +189,103 @@ export function SessionItem({
       </button>
 
       <div className="absolute end-1.5 top-1/2 -translate-y-1/2 opacity-0 transition-all group-hover:opacity-100">
-        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 rounded-md text-sidebar-foreground/60 hover:bg-black/10 hover:text-sidebar-foreground dark:hover:bg-white/10"
-            >
-              <MoreHorizontal className="h-3.5 w-3.5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="end"
-            className="w-44"
-          >
-            {/* Pin / Unpin */}
-            {onPinToggle && (
-              <DropdownMenuItem onClick={onPinToggle}>
-                {session.pinned ? (
-                  <>
-                    <PinOff className="me-2 h-3.5 w-3.5" />
-                    Unpin
-                  </>
-                ) : (
-                  <>
-                    <Pin className="me-2 h-3.5 w-3.5" />
-                    Pin
-                  </>
-                )}
-              </DropdownMenuItem>
-            )}
-
-            {/* Move to folder */}
-            {hasFolderMenu && (
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>
-                  <FolderInput className="me-2 h-3.5 w-3.5" />
-                  Move to folder
-                </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent className="w-44">
-                  {session.folderId && (
-                    <DropdownMenuItem onClick={() => onMoveToFolder(null)}>
-                      <FolderMinus className="me-2 h-3.5 w-3.5" />
-                      Remove from folder
-                    </DropdownMenuItem>
-                  )}
-                  {folders
-                    .filter((f) => f.id !== session.folderId)
-                    .map((folder) => (
-                      <DropdownMenuItem
-                        key={folder.id}
-                        onClick={() => onMoveToFolder(folder.id)}
-                      >
-                        <FolderInput className="me-2 h-3.5 w-3.5" />
-                        {folder.name}
-                      </DropdownMenuItem>
-                    ))}
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-            )}
-
-            {(onPinToggle || hasFolderMenu) && <DropdownMenuSeparator />}
-
-            {onOpenInSplitView && canOpenInSplitView && (
-              <DropdownMenuItem onClick={onOpenInSplitView}>
-                <Columns2 className="me-2 h-3.5 w-3.5" />
-                Open in Split View
-              </DropdownMenuItem>
-            )}
-
-            <DropdownMenuItem
-              onClick={() => {
-                setEditTitle(session.title);
-                setIsEditing(true);
-              }}
-            >
-              <Pencil className="me-2 h-3.5 w-3.5" />
-              Rename
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              className="text-destructive focus:text-destructive"
-              onClick={onDelete}
-            >
-              <Trash2 className="me-2 h-3.5 w-3.5" />
-              Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 rounded-md text-sidebar-foreground/60 hover:bg-black/10 hover:text-sidebar-foreground dark:hover:bg-white/10"
+          onClick={handleMenuButtonClick}
+        >
+          <MoreHorizontal className="h-3.5 w-3.5" />
+        </Button>
       </div>
+
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+        <DropdownMenuTrigger asChild>
+          <span
+            style={{
+              position: "absolute",
+              left: menuPos.x,
+              top: menuPos.y,
+              width: 0,
+              height: 0,
+              pointerEvents: "none",
+            }}
+          />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align={menuAlign} side="bottom" sideOffset={6} className="w-44">
+          {/* Pin / Unpin */}
+          {onPinToggle && (
+            <DropdownMenuItem onClick={onPinToggle}>
+              {session.pinned ? (
+                <>
+                  <PinOff className="me-2 h-3.5 w-3.5" />
+                  Unpin
+                </>
+              ) : (
+                <>
+                  <Pin className="me-2 h-3.5 w-3.5" />
+                  Pin
+                </>
+              )}
+            </DropdownMenuItem>
+          )}
+
+          {/* Move to folder */}
+          {hasFolderMenu && (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <FolderInput className="me-2 h-3.5 w-3.5" />
+                Move to folder
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-44">
+                {session.folderId && (
+                  <DropdownMenuItem onClick={() => onMoveToFolder(null)}>
+                    <FolderMinus className="me-2 h-3.5 w-3.5" />
+                    Remove from folder
+                  </DropdownMenuItem>
+                )}
+                {folders
+                  .filter((f) => f.id !== session.folderId)
+                  .map((folder) => (
+                    <DropdownMenuItem
+                      key={folder.id}
+                      onClick={() => onMoveToFolder(folder.id)}
+                    >
+                      <FolderInput className="me-2 h-3.5 w-3.5" />
+                      {folder.name}
+                    </DropdownMenuItem>
+                  ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          )}
+
+          {(onPinToggle || hasFolderMenu) && <DropdownMenuSeparator />}
+
+          {onOpenInSplitView && canOpenInSplitView && (
+            <DropdownMenuItem onClick={onOpenInSplitView}>
+              <Columns2 className="me-2 h-3.5 w-3.5" />
+              Open in Split View
+            </DropdownMenuItem>
+          )}
+
+          <DropdownMenuItem
+            onClick={() => {
+              setEditTitle(session.title);
+              setIsEditing(true);
+            }}
+          >
+            <Pencil className="me-2 h-3.5 w-3.5" />
+            Rename
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className="text-destructive focus:text-destructive"
+            onClick={onDelete}
+          >
+            <Trash2 className="me-2 h-3.5 w-3.5" />
+            Delete
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

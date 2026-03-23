@@ -49,6 +49,32 @@ const EXTENSION_TO_MONACO: Record<string, string> = {
   zig: "zig",
 };
 
+/**
+ * Disable TS/JS language-service diagnostics for all models.
+ * Editors in this app are read-only — they need syntax highlighting
+ * (tokenizer) but not type-checking (language service).
+ * Prevents "Could not find source file" errors from the TS worker
+ * on inmemory:// model URIs.
+ *
+ * Safe to call multiple times — `setDiagnosticsOptions` is idempotent.
+ */
+export function disableMonacoDiagnostics(monaco: {
+  languages: {
+    typescript: {
+      typescriptDefaults: { setDiagnosticsOptions: (opts: Record<string, boolean>) => void };
+      javascriptDefaults: { setDiagnosticsOptions: (opts: Record<string, boolean>) => void };
+    };
+  };
+}): void {
+  const diagnosticsOff = {
+    noSemanticValidation: true,
+    noSyntaxValidation: true,
+    noSuggestionDiagnostics: true,
+  };
+  monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions(diagnosticsOff);
+  monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions(diagnosticsOff);
+}
+
 export function getMonacoLanguageFromPath(filePath: string): string {
   const fileName = filePath.split("/").pop() ?? "";
   const lower = fileName.toLowerCase();

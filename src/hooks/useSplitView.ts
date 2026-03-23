@@ -48,7 +48,7 @@ export interface SplitViewState {
   dismissSplitView: () => void;
   toggleToolTab: (sessionId: string, toolId: ToolId) => void;
   setDrawerHeight: (sessionId: string, height: number) => void;
-  pruneSplitSessions: (validSessionIds: ReadonlySet<string>, activeSessionId: string | null) => PruneSessionsResult;
+  pruneSplitSessions: (validSessionIds: ReadonlySet<string>) => PruneSessionsResult;
   canShowSessionSplitAction: (sessionId: string | null | undefined, activeSessionId: string | null) => boolean;
 }
 

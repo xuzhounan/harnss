@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { Folder, ChevronRight, Pencil, Trash2, MoreHorizontal, Pin, PinOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -56,6 +56,9 @@ export function FolderSection({
   const [editName, setEditName] = useState(folder.name);
   const [isDragOver, setIsDragOver] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuAlign, setMenuAlign] = useState<"start" | "end">("end");
+  const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
+  const rowRef = useRef<HTMLDivElement>(null);
 
   const handleRename = useCallback(() => {
     const trimmed = editName.trim();
@@ -92,9 +95,32 @@ export function FolderSection({
     [folder.id, onMoveSessionToFolder],
   );
 
+  const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const rowRect = rowRef.current?.getBoundingClientRect();
+    setMenuPos({
+      x: rowRect ? e.clientX - rowRect.left : 0,
+      y: rowRect ? e.clientY - rowRect.top : 0,
+    });
+    setMenuAlign("start");
+    setMenuOpen(true);
+  }, []);
+
+  const handleMenuButtonClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    const rowRect = rowRef.current?.getBoundingClientRect();
+    const buttonRect = e.currentTarget.getBoundingClientRect();
+    setMenuPos({
+      x: rowRect ? buttonRect.right - rowRect.left : 0,
+      y: rowRect ? buttonRect.bottom - rowRect.top : 0,
+    });
+    setMenuAlign("end");
+    setMenuOpen(true);
+  }, []);
+
   if (isEditing) {
     return (
-      <div className="mb-1 flex items-center gap-1 px-1 ps-4">
+      <div className="flex items-center gap-1 px-1 ps-4">
         <input
           autoFocus
           value={editName}
@@ -112,7 +138,7 @@ export function FolderSection({
 
   return (
     <div
-      className={`mb-1 rounded-lg transition-all ${
+      className={`rounded-lg transition-all ${
         isDragOver
           ? "bg-primary/5 ring-1 ring-primary/20 dark:bg-primary/10"
           : ""
@@ -123,11 +149,9 @@ export function FolderSection({
     >
       {/* Folder header */}
       <div
+        ref={rowRef}
         className="group relative flex items-center"
-        onContextMenu={(e) => {
-          e.preventDefault();
-          setMenuOpen(true);
-        }}
+        onContextMenu={handleContextMenu}
       >
         <button
           onClick={() => setExpanded(!expanded)}
@@ -146,52 +170,61 @@ export function FolderSection({
         </button>
 
         <div className="absolute end-1.5 top-1/2 -translate-y-1/2 opacity-0 transition-opacity group-hover:opacity-100">
-          <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 rounded-md text-sidebar-foreground/50 hover:bg-black/10 hover:text-sidebar-foreground dark:hover:bg-white/10"
-              >
-                <MoreHorizontal className="h-3.5 w-3.5" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              className="w-36"
-            >
-              <DropdownMenuItem onClick={() => onPinFolder(!folder.pinned)}>
-                {folder.pinned ? (
-                  <>
-                    <PinOff className="me-2 h-3.5 w-3.5" />
-                    Unpin
-                  </>
-                ) : (
-                  <>
-                    <Pin className="me-2 h-3.5 w-3.5" />
-                    Pin
-                  </>
-                )}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => {
-                  setEditName(folder.name);
-                  setIsEditing(true);
-                }}
-              >
-                <Pencil className="me-2 h-3.5 w-3.5" />
-                Rename
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="text-destructive focus:text-destructive"
-                onClick={onDeleteFolder}
-              >
-                <Trash2 className="me-2 h-3.5 w-3.5" />
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 rounded-md text-sidebar-foreground/50 hover:bg-black/10 hover:text-sidebar-foreground dark:hover:bg-white/10"
+            onClick={handleMenuButtonClick}
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </Button>
         </div>
+
+        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+          <DropdownMenuTrigger asChild>
+            <span
+              style={{
+                position: "absolute",
+                left: menuPos.x,
+                top: menuPos.y,
+                width: 0,
+                height: 0,
+                pointerEvents: "none",
+              }}
+            />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align={menuAlign} side="bottom" sideOffset={6} className="w-36">
+            <DropdownMenuItem onClick={() => onPinFolder(!folder.pinned)}>
+              {folder.pinned ? (
+                <>
+                  <PinOff className="me-2 h-3.5 w-3.5" />
+                  Unpin
+                </>
+              ) : (
+                <>
+                  <Pin className="me-2 h-3.5 w-3.5" />
+                  Pin
+                </>
+              )}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                setEditName(folder.name);
+                setIsEditing(true);
+              }}
+            >
+              <Pencil className="me-2 h-3.5 w-3.5" />
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              onClick={onDeleteFolder}
+            >
+              <Trash2 className="me-2 h-3.5 w-3.5" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Folder contents */}

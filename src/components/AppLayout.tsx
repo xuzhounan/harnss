@@ -71,9 +71,9 @@ export function AppLayout() {
     agents, selectedAgent, saveAgent, deleteAgent, handleAgentChange,
     lockedEngine, lockedAgentId,
     activeProjectId, activeProjectPath, activeSpaceProject, activeSpaceTerminalCwd, showThinking,
-    hasProjects, hasRightPanel, hasToolsColumn, hasBottomTools,
+    hasProjects, isSpaceSwitching, showToolPicker, hasRightPanel, hasToolsColumn, hasBottomTools,
     activeTodos, bgAgents, hasTodos, hasAgents, availableContextual,
-    glassSupported, devFillEnabled, jiraBoardEnabled,
+    glassSupported, macLiquidGlassSupported, liveMacBackgroundEffect, devFillEnabled, jiraBoardEnabled,
     showSettings, setShowSettings,
     spaceCreatorOpen, setSpaceCreatorOpen, editingSpace,
     scrollToMessageId, setScrollToMessageId,
@@ -93,11 +93,13 @@ export function AppLayout() {
   const glassOverlayStyle = useSpaceTheme(
     spaceManager.activeSpace,
     resolvedTheme,
-    glassSupported && settings.transparency,
+    glassSupported && (isMac ? liveMacBackgroundEffect !== "off" : settings.transparency),
+    liveMacBackgroundEffect,
   );
-  const isGlassActive = glassSupported && settings.transparency;
+  const isGlassActive = glassSupported
+    && (isMac ? liveMacBackgroundEffect !== "off" : settings.transparency);
   const isLightGlass = isGlassActive && resolvedTheme !== "dark";
-  const isNativeGlass = isGlassActive && isMac;
+  const isNativeGlass = isGlassActive && isMac && liveMacBackgroundEffect === "liquid-glass";
 
   // ── Window focus tracking (subtle veil on macOS liquid glass when unfocused) ──
   const [windowFocused, setWindowFocused] = useState(true);
@@ -547,6 +549,35 @@ Link: ${issue.url}`;
     ? `linear-gradient(to bottom, color-mix(in oklab, ${chatSurfaceColor} 100%, black 4.5%) 0%, color-mix(in oklab, ${chatSurfaceColor} 97.5%, black 1.75%) 18%, color-mix(in oklab, ${chatSurfaceColor} 93.5%, transparent) 48%, transparent 100%), radial-gradient(138% 88% at 50% 0%, color-mix(in srgb, black ${topFadeShadowOpacity}%, transparent) 0%, transparent 70%)`
     : `linear-gradient(to bottom, ${chatSurfaceColor} 0%, ${chatSurfaceColor} 34%, color-mix(in oklab, ${chatSurfaceColor} 90.5%, transparent) 60%, transparent 100%), radial-gradient(142% 92% at 50% 0%, color-mix(in srgb, black ${topFadeShadowOpacity}%, transparent) 0%, transparent 72%)`;
   const bottomFadeBackground = `linear-gradient(to top, ${chatSurfaceColor}, transparent)`;
+  const activeSessionProject = manager.activeSession
+    ? projectManager.projects.find((project) => project.id === manager.activeSession?.projectId) ?? null
+    : null;
+  const activeSessionSpaceId = activeSessionProject?.spaceId || "default";
+  const isCrossSpaceSessionVisible = !!manager.activeSession && activeSessionSpaceId !== spaceManager.activeSpaceId;
+  const previousRenderedSpaceIdRef = useRef(spaceManager.activeSpaceId);
+  const [spaceSwitchLayoutCooldown, setSpaceSwitchLayoutCooldown] = useState(false);
+  const hasSpaceChangedThisRender = previousRenderedSpaceIdRef.current !== spaceManager.activeSpaceId;
+
+  useLayoutEffect(() => {
+    if (!hasSpaceChangedThisRender) return;
+    previousRenderedSpaceIdRef.current = spaceManager.activeSpaceId;
+    setSpaceSwitchLayoutCooldown(true);
+  }, [hasSpaceChangedThisRender, spaceManager.activeSpaceId]);
+
+  useEffect(() => {
+    if (!spaceSwitchLayoutCooldown || isSpaceSwitching || isCrossSpaceSessionVisible) {
+      return;
+    }
+
+    // Use a 150ms timeout instead of 2 rAF frames to ensure the DOM has fully
+    // settled (panels mounted/unmounted, flex layout recalculated) before
+    // re-enabling Framer Motion layout animations.
+    const timer = setTimeout(() => {
+      setSpaceSwitchLayoutCooldown(false);
+    }, 150);
+
+    return () => clearTimeout(timer);
+  }, [isCrossSpaceSessionVisible, isSpaceSwitching, spaceSwitchLayoutCooldown]);
 
   const getPreviewPaneMetrics = useCallback((previewIndex: number) => {
     const widthPercent = (previewWidthFractions[previewIndex] ?? (1 / previewPaneCount)) * 100;
@@ -554,7 +585,12 @@ Link: ${issue.url}`;
     const handleSharePx = totalHandleWidth / previewPaneCount;
     return { widthPercent, handleSharePx };
   }, [previewPaneCount, previewWidthFractions]);
-  const shouldAnimateSplitLayout = !paneResize.isResizing;
+  const shouldAnimateTopRowLayout = !paneResize.isResizing
+    && !isResizing
+    && !isSpaceSwitching
+    && !isCrossSpaceSessionVisible
+    && !hasSpaceChangedThisRender
+    && !spaceSwitchLayoutCooldown;
   const showSinglePaneSplitPreview = !isSplitActive && splitDragDrop.dragState.isDragging && !!manager.activeSessionId;
   const singlePanePreviewPosition = splitDragDrop.dragState.dropPosition === 0 ? 0 : 1;
   const singlePanePreviewPaneStyle = useMemo(() => {
@@ -585,8 +621,8 @@ Link: ${issue.url}`;
 
     return (
       <motion.div
-        layout={shouldAnimateSplitLayout}
-        transition={shouldAnimateSplitLayout
+        layout={shouldAnimateTopRowLayout}
+        transition={shouldAnimateTopRowLayout
           ? { type: "spring", stiffness: 380, damping: 34, mass: 0.65 }
           : { duration: 0 }}
         ref={(element) => { paneRefs.current[displayIndex] = element; }}
@@ -643,6 +679,9 @@ Link: ${issue.url}`;
             autoGroupTools={settings.autoGroupTools}
             avoidGroupingEdits={settings.avoidGroupingEdits}
             autoExpandTools={settings.autoExpandTools}
+            expandEditToolCallsByDefault={settings.expandEditToolCallsByDefault}
+            showToolIcons={settings.showToolIcons}
+            coloredToolIcons={settings.coloredToolIcons}
             extraBottomPadding={!!paneState.pendingPermission}
             sessionId={sessionId}
             onRevert={isActiveSessionPane && manager.isConnected && manager.revertFiles ? handleRevert : undefined}
@@ -771,7 +810,7 @@ Link: ${issue.url}`;
         </PaneToolDrawer>
       </motion.div>
     );
-  }, [activeProjectPath, activeSpaceProject?.path, activeSpaceTerminalCwd, activeSpaceTerminals.activeTabId, activeSpaceTerminals.tabs, agents, availableContextual, bottomFadeBackground, chatFadeStrength, devFillEnabled, getPreviewPaneMetrics, grabbedElements, handleAgentChange, handleAgentWorktreeChange, handleClaudeModelEffortChange, handleCloseSplitPane, handleComposerClear, handleElementGrab, handleFullRevert, handleModelChange, handlePermissionModeChange, handlePlanModeChange, handleRemoveGrabbedElement, handleRevert, handleSeedDevExampleSpaceData, handleStop, isIsland, lockedAgentId, lockedEngine, manager, paneScrollCallbacks, resolvedTheme, selectedAgent, settings, showThinking, shouldAnimateSplitLayout, sidebar.isOpen, sidebar.toggle, spaceManager.activeSpaceId, spaceTerminals, splitView, titlebarSurfaceColor, topFadeBackground]);
+  }, [activeProjectPath, activeSpaceProject?.path, activeSpaceTerminalCwd, activeSpaceTerminals.activeTabId, activeSpaceTerminals.tabs, agents, availableContextual, bottomFadeBackground, chatFadeStrength, devFillEnabled, getPreviewPaneMetrics, grabbedElements, handleAgentChange, handleAgentWorktreeChange, handleClaudeModelEffortChange, handleCloseSplitPane, handleComposerClear, handleElementGrab, handleFullRevert, handleModelChange, handlePermissionModeChange, handlePlanModeChange, handleRemoveGrabbedElement, handleRevert, handleSeedDevExampleSpaceData, handleStop, isIsland, isSpaceSwitching, lockedAgentId, lockedEngine, manager, paneScrollCallbacks, resolvedTheme, selectedAgent, settings, showThinking, shouldAnimateTopRowLayout, sidebar.isOpen, sidebar.toggle, spaceManager.activeSpaceId, spaceTerminals, splitView, titlebarSurfaceColor, topFadeBackground]);
 
   const { activeTools } = settings;
   const showCodexAuthDialog =
@@ -862,19 +901,28 @@ Link: ${issue.url}`;
             onIslandLayoutChange={settings.setIslandLayout}
             islandShine={settings.islandShine}
             onIslandShineChange={settings.setIslandShine}
+            macBackgroundEffect={settings.macBackgroundEffect}
+            onMacBackgroundEffectChange={settings.setMacBackgroundEffect}
             autoGroupTools={settings.autoGroupTools}
             onAutoGroupToolsChange={settings.setAutoGroupTools}
             avoidGroupingEdits={settings.avoidGroupingEdits}
             onAvoidGroupingEditsChange={settings.setAvoidGroupingEdits}
             autoExpandTools={settings.autoExpandTools}
             onAutoExpandToolsChange={settings.setAutoExpandTools}
+            expandEditToolCallsByDefault={settings.expandEditToolCallsByDefault}
+            onExpandEditToolCallsByDefaultChange={settings.setExpandEditToolCallsByDefault}
             transparentToolPicker={settings.transparentToolPicker}
             onTransparentToolPickerChange={settings.setTransparentToolPicker}
             coloredSidebarIcons={settings.coloredSidebarIcons}
             onColoredSidebarIconsChange={settings.setColoredSidebarIcons}
+            showToolIcons={settings.showToolIcons}
+            onShowToolIconsChange={settings.setShowToolIcons}
+            coloredToolIcons={settings.coloredToolIcons}
+            onColoredToolIconsChange={settings.setColoredToolIcons}
             transparency={settings.transparency}
             onTransparencyChange={settings.setTransparency}
             glassSupported={glassSupported}
+            macLiquidGlassSupported={macLiquidGlassSupported}
             sidebarOpen={sidebar.isOpen}
             onToggleSidebar={sidebar.toggle}
             onReplayWelcome={handleReplayWelcome}
@@ -1007,8 +1055,8 @@ Link: ${issue.url}`;
           )}
 
           <motion.div
-            layout={shouldAnimateSplitLayout}
-            transition={shouldAnimateSplitLayout
+            layout={shouldAnimateTopRowLayout}
+            transition={shouldAnimateTopRowLayout
               ? { type: "spring", stiffness: 380, damping: 34, mass: 0.65 }
               : { duration: 0 }}
             ref={(el) => {
@@ -1088,6 +1136,9 @@ Link: ${issue.url}`;
                 autoGroupTools={settings.autoGroupTools}
                 avoidGroupingEdits={settings.avoidGroupingEdits}
                 autoExpandTools={settings.autoExpandTools}
+                expandEditToolCallsByDefault={settings.expandEditToolCallsByDefault}
+                showToolIcons={settings.showToolIcons}
+                coloredToolIcons={settings.coloredToolIcons}
                 extraBottomPadding={!!manager.pendingPermission}
                 scrollToMessageId={scrollToMessageId}
                 onScrolledToMessage={handleScrolledToMessage}
@@ -1175,10 +1226,23 @@ Link: ${issue.url}`;
                   </Button>
                 )}
               </div>
-              <WelcomeScreen
-                hasProjects={hasProjects}
-                onCreateProject={handleCreateProject}
-              />
+              {isSpaceSwitching ? (
+                <div className="flex min-h-0 flex-1 flex-col px-8 py-10">
+                  <div className="w-48 animate-pulse rounded-full bg-foreground/8 h-4" />
+                  <div className="mt-8 space-y-4">
+                    <div className="h-12 animate-pulse rounded-2xl bg-foreground/6" />
+                    <div className="h-28 animate-pulse rounded-3xl bg-foreground/5" />
+                    <div className="h-12 animate-pulse rounded-2xl bg-foreground/6" />
+                    <div className="h-20 animate-pulse rounded-3xl bg-foreground/5" />
+                  </div>
+                  <div className="mt-auto h-24 animate-pulse rounded-[28px] bg-foreground/6" />
+                </div>
+              ) : (
+                <WelcomeScreen
+                  hasProjects={hasProjects}
+                  onCreateProject={handleCreateProject}
+                />
+              )}
               </>
             )}
           </motion.div>
@@ -1203,8 +1267,8 @@ Link: ${issue.url}`;
 
           {hasRightPanel && (
             <motion.div
-              layout={shouldAnimateSplitLayout}
-              transition={shouldAnimateSplitLayout
+              layout={shouldAnimateTopRowLayout}
+              transition={shouldAnimateTopRowLayout
                 ? { type: "spring", stiffness: 380, damping: 34, mass: 0.65 }
                 : { duration: 0 }}
               className={`flex shrink-0 overflow-hidden ${showSinglePaneSplitPreview ? "pointer-events-none opacity-0" : ""}`}
@@ -1274,7 +1338,12 @@ Link: ${issue.url}`;
                             : { flex: "1 1 0%", minHeight: 0 }
                         }
                       >
-                        <BackgroundAgentsPanel agents={bgAgents.agents} onDismiss={bgAgents.dismissAgent} onStopAgent={bgAgents.stopAgent} />
+                        <BackgroundAgentsPanel
+                          agents={bgAgents.agents}
+                          expandEditToolCallsByDefault={settings.expandEditToolCallsByDefault}
+                          onDismiss={bgAgents.dismissAgent}
+                          onStopAgent={bgAgents.stopAgent}
+                        />
                       </div>
                     )}
                   </>
@@ -1355,8 +1424,8 @@ Link: ${issue.url}`;
 
             return (
               <motion.div
-                layout={shouldAnimateSplitLayout}
-                transition={shouldAnimateSplitLayout
+                layout={shouldAnimateTopRowLayout}
+                transition={shouldAnimateTopRowLayout
                   ? { type: "spring", stiffness: 380, damping: 34, mass: 0.65 }
                   : { duration: 0 }}
                 className={`flex shrink-0 overflow-hidden ${showSinglePaneSplitPreview ? "pointer-events-none opacity-0" : ""}`}
@@ -1420,13 +1489,17 @@ Link: ${issue.url}`;
           })()}
 
           {/* Tool picker — always visible */}
-          {manager.activeSessionId && (
+          {showToolPicker && (
             <motion.div
-              layout={shouldAnimateSplitLayout}
-              transition={shouldAnimateSplitLayout
+              layout={shouldAnimateTopRowLayout}
+              transition={shouldAnimateTopRowLayout
                 ? { type: "spring", stiffness: 380, damping: 34, mass: 0.65 }
                 : { duration: 0 }}
-              className={`${isIsland ? "ms-[var(--island-panel-gap)]" : "tool-picker-shell"} shrink-0 overflow-hidden ${showSinglePaneSplitPreview ? "pointer-events-none opacity-0" : ""}`}
+              className={`${isIsland ? "ms-[var(--island-panel-gap)]" : "tool-picker-shell"} shrink-0 overflow-hidden ${
+                showSinglePaneSplitPreview || isSpaceSwitching && !manager.activeSessionId
+                  ? "pointer-events-none"
+                  : ""
+              }`}
               style={showSinglePaneSplitPreview ? { width: 0, minWidth: 0, marginInlineStart: 0 } : undefined}
             >
               <ToolPicker
@@ -1608,6 +1681,8 @@ Link: ${issue.url}`;
           onAutoGroupToolsChange={settings.setAutoGroupTools}
           autoExpandTools={settings.autoExpandTools}
           onAutoExpandToolsChange={settings.setAutoExpandTools}
+          expandEditToolCallsByDefault={settings.expandEditToolCallsByDefault}
+          onExpandEditToolCallsByDefaultChange={settings.setExpandEditToolCallsByDefault}
           transparency={settings.transparency}
           onTransparencyChange={settings.setTransparency}
           glassSupported={glassSupported}

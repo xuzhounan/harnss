@@ -68,7 +68,7 @@ export function CommitInput({
   const canCommit = commitMessage.trim().length > 0 && stagedCount > 0;
 
   return (
-    <div className="mx-3 mb-1">
+    <div className="mx-3 mb-1.5">
       <div className="overflow-hidden rounded-md border border-foreground/[0.08] bg-foreground/[0.02] transition-colors focus-within:border-foreground/[0.15] focus-within:bg-foreground/[0.04]">
         <textarea
           value={commitMessage}
@@ -79,31 +79,29 @@ export function CommitInput({
           className="w-full resize-none bg-transparent px-2.5 pt-1.5 pb-1 text-[11px] leading-relaxed text-foreground/80 outline-none placeholder:text-foreground/30"
         />
         {/* Action bar */}
-        <div className="flex items-center gap-1 border-t border-foreground/[0.06] px-1 py-0.5">
+        <div className="flex items-center gap-1.5 px-1.5 pb-1.5">
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 type="button"
                 onClick={handleGenerateMessage}
                 disabled={generatingMessage || totalChanges === 0}
-                className="flex h-5.5 items-center gap-1 rounded-md px-1.5 text-[10px] font-medium text-foreground/40 transition-colors hover:bg-foreground/[0.06] hover:text-foreground/70 disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer"
+                className="flex h-6 w-6 items-center justify-center rounded-md border border-foreground/[0.08] bg-foreground/[0.03] text-foreground/40 transition-colors hover:border-foreground/[0.12] hover:bg-foreground/[0.06] hover:text-foreground/70 disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer"
               >
                 {generatingMessage ? (
                   <Loader2 className="h-3 w-3 animate-spin" />
                 ) : (
                   <Sparkles className="h-3 w-3" />
                 )}
-                <span>Generate</span>
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom" sideOffset={4}>
               <p className="text-xs">AI commit message</p>
-              <p className="text-[10px] text-background/60">Respects CLAUDE.md rules</p>
             </TooltipContent>
           </Tooltip>
           <div className="min-w-0 flex-1" />
           {stagedCount > 0 && (
-            <span className="text-[10px] tabular-nums text-foreground/40">
+            <span className="text-[10px] tabular-nums text-foreground/35">
               {stagedCount} staged
             </span>
           )}
@@ -113,10 +111,10 @@ export function CommitInput({
                 type="button"
                 onClick={handleCommit}
                 disabled={!canCommit}
-                className={`flex h-5.5 items-center gap-1 rounded-md px-2 text-[10px] font-medium transition-colors cursor-pointer ${
+                className={`flex h-6 items-center gap-1 rounded-md px-2.5 text-[10px] font-medium transition-colors cursor-pointer ${
                   canCommit
-                    ? "bg-foreground/[0.1] text-foreground/70 hover:bg-foreground/[0.15] hover:text-foreground/90"
-                    : "text-foreground/25 cursor-not-allowed"
+                    ? "border border-foreground/[0.1] bg-foreground/[0.07] text-foreground/75 hover:bg-foreground/[0.12] hover:text-foreground"
+                    : "text-foreground/20 cursor-not-allowed"
                 }`}
               >
                 <Check className="h-3 w-3" />

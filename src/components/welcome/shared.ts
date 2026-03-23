@@ -33,6 +33,8 @@ export interface AppearanceStepProps extends WizardStepProps {
   onAutoGroupToolsChange: (enabled: boolean) => void;
   autoExpandTools: boolean;
   onAutoExpandToolsChange: (enabled: boolean) => void;
+  expandEditToolCallsByDefault: boolean;
+  onExpandEditToolCallsByDefaultChange: (enabled: boolean) => void;
   transparency: boolean;
   onTransparencyChange: (enabled: boolean) => void;
   glassSupported: boolean;

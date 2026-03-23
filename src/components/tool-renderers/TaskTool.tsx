@@ -43,6 +43,10 @@ function stepToUIMessage(step: SubagentToolStep): UIMessage {
   };
 }
 
+function isWideToolName(toolName: string | null | undefined): boolean {
+  return toolName === "Edit" || toolName === "Write" || toolName === "NotebookEdit";
+}
+
 export function TaskTool({ message }: { message: UIMessage }) {
   const [expanded, setExpanded] = useChatPersistedState(`task:${message.id}`, false);
   const isRunning = message.subagentStatus === "running";
@@ -230,6 +234,7 @@ function SubagentStepRow({ step }: { step: SubagentToolStep }) {
   const [open, setOpen] = useChatPersistedState(`task-step:${step.toolUseId}`, false);
   const hasResult = !!step.toolResult;
   const isError = !!step.toolError;
+  const isWideTool = isWideToolName(step.toolName);
   const Icon = getToolIcon(step.toolName);
 
   // Convert step to a UIMessage so standard tool renderers can render it
@@ -267,7 +272,7 @@ function SubagentStepRow({ step }: { step: SubagentToolStep }) {
       </CollapsibleTrigger>
       {hasResult && (
         <CollapsibleContent>
-          <div className="ms-4 mt-1 mb-1.5">
+          <div className={isWideTool ? "ms-4 min-w-0" : "ms-4 mt-1 mb-1.5"}>
             <ExpandedToolContent message={pseudoMessage} />
           </div>
         </CollapsibleContent>

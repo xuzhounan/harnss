@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   Pencil,
   Trash2,
@@ -113,7 +113,10 @@ export function ProjectSection({
   const [isDragOver, setIsDragOver] = useState(false);
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuAlign, setMenuAlign] = useState<"start" | "end">("end");
+  const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
   const openingIconPickerRef = useRef(false);
+  const headerRef = useRef<HTMLDivElement>(null);
   // Pagination: show N items initially, load 20 more on each click
   const [visibleCount, setVisibleCount] = useState(defaultChatLimit);
 
@@ -160,6 +163,29 @@ export function ProjectSection({
     }
     setIsEditing(false);
   };
+
+  const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const headerRect = headerRef.current?.getBoundingClientRect();
+    setMenuPos({
+      x: headerRect ? e.clientX - headerRect.left : 0,
+      y: headerRect ? e.clientY - headerRect.top : 0,
+    });
+    setMenuAlign("start");
+    setMenuOpen(true);
+  }, []);
+
+  const handleMenuButtonClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    const headerRect = headerRef.current?.getBoundingClientRect();
+    const buttonRect = e.currentTarget.getBoundingClientRect();
+    setMenuPos({
+      x: headerRect ? buttonRect.right - headerRect.left : 0,
+      y: headerRect ? buttonRect.bottom - headerRect.top : 0,
+    });
+    setMenuAlign("end");
+    setMenuOpen(true);
+  }, []);
 
   if (isEditing) {
     return (
@@ -274,16 +300,14 @@ export function ProjectSection({
     >
       {/* Project header row */}
       <div
+        ref={headerRef}
         className="group relative flex items-center"
         draggable
         onDragStart={(e) => {
           e.dataTransfer.setData("application/x-project-id", project.id);
           e.dataTransfer.effectAllowed = "move";
         }}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          setMenuOpen(true);
-        }}
+        onContextMenu={handleContextMenu}
       >
         <button
           onClick={() => setExpanded(!expanded)}
@@ -338,108 +362,16 @@ export function ProjectSection({
           </Button>
 
           <Popover open={iconPickerOpen} onOpenChange={setIconPickerOpen}>
-            <PopoverAnchor>
-              <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 shrink-0 rounded-lg text-sidebar-foreground/50 transition-all hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
-                  >
-                    <MoreHorizontal className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="end"
-                className="w-48"
-                onCloseAutoFocus={(e) => {
-                  if (!openingIconPickerRef.current) return;
-                  e.preventDefault();
-                  openingIconPickerRef.current = false;
-                }}
+            <PopoverAnchor asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0 rounded-lg text-sidebar-foreground/50 transition-all hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
+                onClick={handleMenuButtonClick}
               >
-                <DropdownMenuItem onClick={onCreateFolder}>
-                  <FolderPlus className="me-2 h-3.5 w-3.5" />
-                  New folder
-                </DropdownMenuItem>
-                <DropdownMenuCheckboxItem
-                  checked={organizeByChatBranch}
-                  onCheckedChange={onSetOrganizeByChatBranch}
-                >
-                  <GitBranch className="me-2 h-3.5 w-3.5" />
-                  Organize by branch
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={() => {
-                    setEditName(project.name);
-                    setIsEditing(true);
-                  }}
-                >
-                  <Pencil className="me-2 h-3.5 w-3.5" />
-                  Rename
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={(e) => {
-                    e.preventDefault();
-                    openingIconPickerRef.current = true;
-                    setMenuOpen(false);
-                    requestAnimationFrame(() => setIconPickerOpen(true));
-                  }}
-                >
-                  <Smile className="me-2 h-3.5 w-3.5" />
-                  Set icon
-                </DropdownMenuItem>
-                {project.icon && (
-                  <DropdownMenuItem onClick={() => onUpdateIcon(null, null)}>
-                    <X className="me-2 h-3.5 w-3.5" />
-                    Remove icon
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuSeparator />
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>
-                    <History className="me-2 h-3.5 w-3.5" />
-                    Resume CC Chat
-                  </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent className="max-h-80 w-72 overflow-y-auto">
-                    <CCSessionList projectPath={project.path} onSelect={onImportCCSession} />
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-                {otherSpaces.length > 0 && (
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger>
-                      <ArrowRightLeft className="me-2 h-3.5 w-3.5" />
-                      Move to space
-                    </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent className="w-44">
-                      {otherSpaces.map((s) => {
-                        const SpIcon = s.iconType === "lucide" ? resolveLucideIcon(s.icon) : null;
-                        return (
-                          <DropdownMenuItem key={s.id} onClick={() => onMoveToSpace(s.id)}>
-                            {s.iconType === "emoji" ? (
-                              <span className="me-2 text-sm">{s.icon}</span>
-                            ) : SpIcon ? (
-                              <SpIcon className="me-2 h-3.5 w-3.5" />
-                            ) : null}
-                            {s.name}
-                          </DropdownMenuItem>
-                        );
-                      })}
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
-                )}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onClick={onDeleteProject}
-                >
-                  <Trash2 className="me-2 h-3.5 w-3.5" />
-                  Delete
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </PopoverAnchor>
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </PopoverAnchor>
 
           {/* Icon picker popover — anchored to the ... button, triggered from dropdown "Set icon" */}
           <PopoverContent align="start" side="right" className="w-72 p-3">
@@ -454,6 +386,112 @@ export function ProjectSection({
           </PopoverContent>
         </Popover>
         </div>
+
+        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+          <DropdownMenuTrigger asChild>
+            <span
+              style={{
+                position: "absolute",
+                left: menuPos.x,
+                top: menuPos.y,
+                width: 0,
+                height: 0,
+                pointerEvents: "none",
+              }}
+            />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align={menuAlign}
+            side="bottom"
+            sideOffset={6}
+            className="w-48"
+            onCloseAutoFocus={(e) => {
+              if (!openingIconPickerRef.current) return;
+              e.preventDefault();
+              openingIconPickerRef.current = false;
+            }}
+          >
+            <DropdownMenuItem onClick={onCreateFolder}>
+              <FolderPlus className="me-2 h-3.5 w-3.5" />
+              New folder
+            </DropdownMenuItem>
+            <DropdownMenuCheckboxItem
+              checked={organizeByChatBranch}
+              onCheckedChange={onSetOrganizeByChatBranch}
+            >
+              <GitBranch className="me-2 h-3.5 w-3.5" />
+              Organize by branch
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => {
+                setEditName(project.name);
+                setIsEditing(true);
+              }}
+            >
+              <Pencil className="me-2 h-3.5 w-3.5" />
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={(e) => {
+                e.preventDefault();
+                openingIconPickerRef.current = true;
+                setMenuOpen(false);
+                requestAnimationFrame(() => setIconPickerOpen(true));
+              }}
+            >
+              <Smile className="me-2 h-3.5 w-3.5" />
+              Set icon
+            </DropdownMenuItem>
+            {project.icon && (
+              <DropdownMenuItem onClick={() => onUpdateIcon(null, null)}>
+                <X className="me-2 h-3.5 w-3.5" />
+                Remove icon
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <History className="me-2 h-3.5 w-3.5" />
+                Resume CC Chat
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="max-h-80 w-72 overflow-y-auto">
+                <CCSessionList projectPath={project.path} onSelect={onImportCCSession} />
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            {otherSpaces.length > 0 && (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <ArrowRightLeft className="me-2 h-3.5 w-3.5" />
+                  Move to space
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-44">
+                  {otherSpaces.map((s) => {
+                    const SpIcon = s.iconType === "lucide" ? resolveLucideIcon(s.icon) : null;
+                    return (
+                      <DropdownMenuItem key={s.id} onClick={() => onMoveToSpace(s.id)}>
+                        {s.iconType === "emoji" ? (
+                          <span className="me-2 text-sm">{s.icon}</span>
+                        ) : SpIcon ? (
+                          <SpIcon className="me-2 h-3.5 w-3.5" />
+                        ) : null}
+                        {s.name}
+                      </DropdownMenuItem>
+                    );
+                  })}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              onClick={onDeleteProject}
+            >
+              <Trash2 className="me-2 h-3.5 w-3.5" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Nested chats */}

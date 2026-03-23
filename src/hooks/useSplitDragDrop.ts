@@ -54,11 +54,14 @@ export function useSplitDragDrop({
   });
 
   const dragCounterRef = useRef(0);
-  const cancelDrag = useCallback(() => {
+  const resetDragPreview = useCallback(() => {
     dragCounterRef.current = 0;
-    clearSidebarDragPayload();
     setDragState({ isDragging: false, dropPosition: null, draggedSessionId: null });
   }, []);
+  const finishDrag = useCallback(() => {
+    resetDragPreview();
+    clearSidebarDragPayload();
+  }, [resetDragPreview]);
 
   /** Calculate which drop position the mouse X is closest to. */
   const calcDropPosition = useCallback((clientX: number): number | null => {
@@ -112,8 +115,6 @@ export function useSplitDragDrop({
   }, [containerRef, widthFractions, paneCount]);
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
-    dragCounterRef.current++;
-
     const payload = getSidebarDragPayload(e.dataTransfer);
     if (!payload || payload.kind !== "session") return;
 
@@ -123,6 +124,7 @@ export function useSplitDragDrop({
     // Don't allow duplicates
     if (visibleSessionIds.has(payload.id)) return;
 
+    dragCounterRef.current++;
     e.preventDefault();
     const position = calcDropPosition(e.clientX);
 
@@ -152,28 +154,28 @@ export function useSplitDragDrop({
   const handleDragLeave = useCallback((_e: React.DragEvent) => {
     dragCounterRef.current--;
     if (dragCounterRef.current <= 0) {
-      cancelDrag();
+      resetDragPreview();
     }
-  }, [cancelDrag]);
+  }, [resetDragPreview]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
 
     const payload = getSidebarDragPayload(e.dataTransfer);
     if (!payload || payload.kind !== "session") {
-      cancelDrag();
+      finishDrag();
       return;
     }
 
     if (!canAcceptDrop || visibleSessionIds.has(payload.id)) {
-      cancelDrag();
+      finishDrag();
       return;
     }
 
     const effectivePosition = calcDropPosition(e.clientX) ?? paneCount;
-    cancelDrag();
+    finishDrag();
     onDrop(payload.id, effectivePosition);
-  }, [calcDropPosition, cancelDrag, canAcceptDrop, onDrop, paneCount, visibleSessionIds]);
+  }, [calcDropPosition, canAcceptDrop, finishDrag, onDrop, paneCount, visibleSessionIds]);
 
   useEffect(() => {
     if (!dragState.isDragging) {
@@ -181,14 +183,14 @@ export function useSplitDragDrop({
     }
 
     const handleWindowDragEnd = () => {
-      cancelDrag();
+      finishDrag();
     };
     const handleWindowBlur = () => {
-      cancelDrag();
+      resetDragPreview();
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        cancelDrag();
+        resetDragPreview();
       }
     };
 
@@ -201,13 +203,13 @@ export function useSplitDragDrop({
       window.removeEventListener("blur", handleWindowBlur);
       window.removeEventListener("keydown", handleKeyDown, true);
     };
-  }, [cancelDrag, dragState.isDragging]);
+  }, [dragState.isDragging, finishDrag, resetDragPreview]);
 
   useEffect(() => {
     if (dragState.isDragging && !canAcceptDrop) {
-      cancelDrag();
+      resetDragPreview();
     }
-  }, [canAcceptDrop, cancelDrag, dragState.isDragging]);
+  }, [canAcceptDrop, dragState.isDragging, resetDragPreview]);
 
   return {
     dragState,

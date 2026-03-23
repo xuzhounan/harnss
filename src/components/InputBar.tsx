@@ -258,7 +258,7 @@ const CLAUDE_EFFORT_DESCRIPTIONS: Record<ClaudeEffort, string> = {
 /** Shared className overrides for ghost toolbar buttons in the input bar.
  *  Applied on top of `<Button variant="ghost" size="xs">` to match the
  *  toolbar look: muted text, subtle hover, rounded-lg corners. */
-const TOOLBAR_BTN = "rounded-lg font-normal text-muted-foreground hover:bg-muted/40 hover:text-foreground";
+const TOOLBAR_BTN = "rounded-lg font-normal text-muted-foreground transition-colors duration-150 hover:bg-muted/50 hover:text-foreground";
 
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
 type AcceptedMediaType = (typeof ACCEPTED_IMAGE_TYPES)[number];
@@ -1226,12 +1226,12 @@ export const InputBar = memo(function InputBar({
         onChange={handleFileInputChange}
       />
       <div
-        className={`pointer-events-auto rounded-2xl border bg-background/55 shadow-lg backdrop-blur-lg transition-colors focus-within:border-border ${
+        className={`pointer-events-auto rounded-2xl border bg-black/[0.09] dark:bg-white/[0.08] shadow-[0_2px_12px_-3px_rgba(0,0,0,0.06),0_8px_24px_-8px_rgba(0,0,0,0.04)] backdrop-blur-xl ring-1 ring-inset ring-white/[0.06] transition-all duration-200 ease-out focus-within:shadow-[0_2px_16px_-3px_rgba(0,0,0,0.08),0_12px_32px_-8px_rgba(0,0,0,0.06)] dark:shadow-[0_2px_12px_-3px_rgba(0,0,0,0.35),0_8px_24px_-8px_rgba(0,0,0,0.2)] dark:focus-within:shadow-[0_2px_16px_-3px_rgba(0,0,0,0.4),0_12px_32px_-8px_rgba(0,0,0,0.25)] ${
           isDragging
-            ? "border-primary/60 bg-primary/5"
+            ? "border-primary/50 bg-primary/5 ring-primary/25"
             : speech.isListening
-              ? "border-red-400/40 ring-1 ring-red-400/20"
-              : "border-border/60"
+              ? "border-red-400/40 ring-red-400/20"
+              : "border-border/35 focus-within:border-border/60"
         }`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -1317,12 +1317,12 @@ export const InputBar = memo(function InputBar({
 
         {/* Input area — contentEditable with inline chip support */}
         <div
-          className="relative px-4 pt-3.5 pb-2"
+          className="relative px-5 pt-4 pb-2.5"
           onClick={() => editableRef.current?.focus()}
         >
           {/* Placeholder (shown when input is empty) */}
           {!hasContent && (
-            <div className="pointer-events-none absolute inset-0 flex items-start px-4 pt-3.5 pb-2 text-sm text-muted-foreground/50">
+            <div className="pointer-events-none absolute inset-0 flex items-start px-5 pt-4 pb-2.5 text-sm text-muted-foreground/35 select-none">
               {isCompacting
                 ? "Compacting context..."
                 : isAwaitingAcpOptions
@@ -1340,7 +1340,7 @@ export const InputBar = memo(function InputBar({
             onInput={handleEditableInput}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            className={`min-h-[1.5em] max-h-[200px] overflow-y-auto text-sm outline-none whitespace-pre-wrap wrap-break-word ${
+            className={`min-h-[24px] max-h-[200px] overflow-y-auto text-[14.5px] leading-relaxed outline-none whitespace-pre-wrap wrap-break-word ${
               isAwaitingAcpOptions ? "cursor-wait text-muted-foreground/60" : "text-foreground"
             }`}
             role="textbox"
@@ -1356,17 +1356,17 @@ export const InputBar = memo(function InputBar({
 
         {/* Attachment previews — click to open annotation editor */}
         {attachments.length > 0 && (
-          <div className="flex flex-wrap gap-2 px-4 pb-2">
+          <div className="flex flex-wrap gap-2.5 px-5 pb-2.5">
             {attachments.map((att) => (
               <div
                 key={att.id}
-                className="group/att relative h-16 w-16 shrink-0 cursor-pointer overflow-hidden rounded-lg border border-border/40"
+                className="group/att relative h-16 w-16 shrink-0 cursor-pointer overflow-hidden rounded-xl border border-border/30 shadow-sm ring-1 ring-inset ring-white/[0.04] transition-all duration-200 hover:shadow-md hover:border-border/50"
                 onClick={() => setEditingAttachment(att)}
               >
                 <img
                   src={`data:${att.mediaType};base64,${att.data}`}
                   alt={att.fileName ?? "attachment"}
-                  className="h-full w-full object-cover"
+                  className="h-full w-full object-cover transition-transform duration-200 group-hover/att:scale-105"
                 />
                 {/* Edit overlay icon — bottom-right, visible on hover */}
                 <div className="absolute bottom-0.5 end-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-background/90 text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover/att:opacity-100">
@@ -1388,11 +1388,11 @@ export const InputBar = memo(function InputBar({
 
         {/* Grabbed element previews (from browser inspector) */}
         {grabbedElements && grabbedElements.length > 0 && (
-          <div className="flex flex-wrap gap-2 px-4 pb-2">
+          <div className="flex flex-wrap gap-2.5 px-5 pb-2.5">
             {grabbedElements.map((ge) => (
               <div
                 key={ge.id}
-                className="group/grab relative flex items-center gap-2 rounded-lg border border-blue-500/20 bg-blue-500/5 px-2.5 py-1.5"
+                className="group/grab relative flex items-center gap-2.5 rounded-xl border border-blue-500/15 bg-blue-500/5 px-3 py-2 shadow-sm transition-all duration-150 hover:border-blue-500/25 hover:bg-blue-500/8"
               >
                 <Crosshair className="h-3.5 w-3.5 shrink-0 text-blue-400" />
                 <div className="flex flex-col">
@@ -1436,9 +1436,9 @@ export const InputBar = memo(function InputBar({
           />
         )}
 
-        <div className="flex items-center gap-1 px-3 pb-2.5">
+        <div className="mx-4 flex items-center gap-1.5 border-t border-border/[0.08] px-1 pt-2 pb-2.5">
           {/* Left controls — scrollable as a defensive fallback (should never trigger with proper MIN_CHAT_WIDTH) */}
-          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scrollbar-none">
+          <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto scrollbar-none">
             <Button
               variant="ghost"
               size="xs"
@@ -1458,14 +1458,14 @@ export const InputBar = memo(function InputBar({
                     size="xs"
                     onClick={speech.toggle}
                     disabled={speech.isModelLoading || speech.isTranscribing}
-                    className={`rounded-lg font-normal ${
+                    className={`rounded-lg font-normal transition-colors duration-150 ${
                       speech.isListening
                         ? "text-red-400 bg-red-500/10 recording-pulse hover:bg-red-500/15"
                         : speech.isTranscribing
                           ? "text-amber-400"
                           : speech.isModelLoading
                             ? "text-muted-foreground/40 cursor-wait"
-                            : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                            : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                     }`}
                   >
                     {speech.isListening ? (
@@ -1503,6 +1503,8 @@ export const InputBar = memo(function InputBar({
                 <TooltipContent side="top">{speech.nativeHint}</TooltipContent>
               </Tooltip>
             ) : null}
+
+            <span className="mx-0.5 h-3.5 w-px shrink-0 bg-border/20" aria-hidden="true" />
 
             {/* Engine picker — always visible, includes agent switching + model/config submenus */}
             <DropdownMenu>
@@ -1645,6 +1647,12 @@ export const InputBar = memo(function InputBar({
                           Loading options...
                         </DropdownMenuItem>
                       )}
+                      {/* ACP no config options available */}
+                      {isACPAgent && !acpConfigOptionsLoading && !showACPConfigOptions && (
+                        <DropdownMenuItem disabled className="text-xs text-muted-foreground">
+                          Could not load options for this agent
+                        </DropdownMenuItem>
+                      )}
                     </>
                   );
 
@@ -1719,6 +1727,8 @@ export const InputBar = memo(function InputBar({
               </DropdownMenuContent>
             </DropdownMenu>
 
+            <span className="mx-0.5 h-3.5 w-px shrink-0 bg-border/20" aria-hidden="true" />
+
             <EngineControls
               isCodexAgent={isCodexAgent}
               isACPAgent={isACPAgent}
@@ -1733,21 +1743,20 @@ export const InputBar = memo(function InputBar({
           </div>
 
           {/* Right controls — always visible, never shrink */}
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-2">
             {contextUsage && (() => {
               const totalInput = contextUsage.inputTokens + contextUsage.cacheReadTokens + contextUsage.cacheCreationTokens;
               const percent = Math.min(100, (totalInput / contextUsage.contextWindow) * 100);
-              const radius = 7;
+              const radius = 8;
               const circumference = 2 * Math.PI * radius;
               const dashOffset = circumference - (percent / 100) * circumference;
               return (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
+                    <button
+                      type="button"
                       onClick={() => { if (!isProcessing) onCompact?.(); }}
-                      className={`rounded-full p-0.5 hover:bg-muted/40 ${isProcessing ? "opacity-40 cursor-default" : ""} ${getContextColor(percent)}`}
+                      className={`inline-flex shrink-0 cursor-pointer rounded-full hover:opacity-80 ${isProcessing ? "opacity-40 cursor-default" : ""} ${getContextColor(percent)}`}
                     >
                       <svg width="20" height="20" viewBox="0 0 20 20" className={isCompacting ? "animate-spin" : "-rotate-90"}>
                         <circle
@@ -1766,7 +1775,7 @@ export const InputBar = memo(function InputBar({
                           strokeDashoffset={isCompacting ? circumference * 0.7 : dashOffset}
                         />
                       </svg>
-                    </Button>
+                    </button>
                   </TooltipTrigger>
                   <TooltipContent side="top" className="max-w-64">
                     <div className="space-y-1.5 text-xs">
@@ -1806,7 +1815,7 @@ export const InputBar = memo(function InputBar({
                 size="icon"
                 variant="ghost"
                 onClick={onStop}
-                className="h-7 w-7 rounded-full text-muted-foreground hover:text-destructive"
+                className="h-7 w-7 rounded-full text-muted-foreground transition-colors duration-150 hover:bg-destructive/10 hover:text-destructive"
               >
                 <Square className="h-3 w-3" />
               </Button>
@@ -1816,7 +1825,7 @@ export const InputBar = memo(function InputBar({
                 size="icon"
                 onClick={handleSend}
                 disabled={isAwaitingAcpOptions || ((!hasContent && attachments.length === 0 && (!grabbedElements || grabbedElements.length === 0)) || isSending)}
-                className="h-8 w-8 rounded-full"
+                className="h-8 w-8 rounded-full shadow-sm transition-all duration-150 hover:shadow-md active:scale-95 disabled:shadow-none disabled:active:scale-100"
               >
                 <ArrowUp className="h-4 w-4" />
               </Button>

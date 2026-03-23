@@ -3,7 +3,7 @@ import { SunMoon, Layout, Blend, Wrench } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { SettingRow, SettingsSelect } from "@/components/settings/shared";
-import type { ThemeOption } from "@/types";
+import type { MacBackgroundEffect, ThemeOption } from "@/types";
 
 // ── Props ──
 
@@ -14,12 +14,20 @@ interface AppearanceSettingsProps {
   onIslandLayoutChange: (enabled: boolean) => void;
   islandShine: boolean;
   onIslandShineChange: (enabled: boolean) => void;
+  macBackgroundEffect: MacBackgroundEffect;
+  onMacBackgroundEffectChange: (effect: MacBackgroundEffect) => void;
   autoGroupTools: boolean;
   onAutoGroupToolsChange: (enabled: boolean) => void;
   avoidGroupingEdits: boolean;
   onAvoidGroupingEditsChange: (enabled: boolean) => void;
   autoExpandTools: boolean;
   onAutoExpandToolsChange: (enabled: boolean) => void;
+  expandEditToolCallsByDefault: boolean;
+  onExpandEditToolCallsByDefaultChange: (enabled: boolean) => void;
+  showToolIcons: boolean;
+  onShowToolIconsChange: (enabled: boolean) => void;
+  coloredToolIcons: boolean;
+  onColoredToolIconsChange: (enabled: boolean) => void;
   transparentToolPicker: boolean;
   onTransparentToolPickerChange: (enabled: boolean) => void;
   coloredSidebarIcons: boolean;
@@ -28,6 +36,8 @@ interface AppearanceSettingsProps {
   onTransparencyChange: (enabled: boolean) => void;
   /** Whether the platform supports transparency (glass/mica) */
   glassSupported: boolean;
+  isMac: boolean;
+  macLiquidGlassSupported: boolean;
 }
 
 // ── Component ──
@@ -39,12 +49,20 @@ export const AppearanceSettings = memo(function AppearanceSettings({
   onIslandLayoutChange,
   islandShine,
   onIslandShineChange,
+  macBackgroundEffect,
+  onMacBackgroundEffectChange,
   autoGroupTools,
   onAutoGroupToolsChange,
   avoidGroupingEdits,
   onAvoidGroupingEditsChange,
   autoExpandTools,
   onAutoExpandToolsChange,
+  expandEditToolCallsByDefault,
+  onExpandEditToolCallsByDefaultChange,
+  showToolIcons,
+  onShowToolIconsChange,
+  coloredToolIcons,
+  onColoredToolIconsChange,
   transparentToolPicker,
   onTransparentToolPickerChange,
   coloredSidebarIcons,
@@ -52,7 +70,13 @@ export const AppearanceSettings = memo(function AppearanceSettings({
   transparency,
   onTransparencyChange,
   glassSupported,
+  isMac,
+  macLiquidGlassSupported,
 }: AppearanceSettingsProps) {
+  const effectiveMacBackgroundEffect = !macLiquidGlassSupported && macBackgroundEffect === "liquid-glass"
+    ? "vibrancy"
+    : macBackgroundEffect;
+
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
@@ -127,6 +151,37 @@ export const AppearanceSettings = memo(function AppearanceSettings({
               <Switch
                 checked={autoExpandTools}
                 onCheckedChange={onAutoExpandToolsChange}
+              />
+            </SettingRow>
+
+            <SettingRow
+              label="Expand Edit and Write tools by default"
+              description="Start Edit and Write tool calls open when they appear. Disable to keep them collapsed until you open them."
+            >
+              <Switch
+                checked={expandEditToolCallsByDefault}
+                onCheckedChange={onExpandEditToolCallsByDefaultChange}
+              />
+            </SettingRow>
+
+            <SettingRow
+              label="Show tool icons"
+              description="Display icons next to tool call labels. Disable for a text-only view."
+            >
+              <Switch
+                checked={showToolIcons}
+                onCheckedChange={onShowToolIconsChange}
+              />
+            </SettingRow>
+
+            <SettingRow
+              label="Colored tool icons"
+              description="Tint tool call icons with per-tool colors. Disable for monochrome icons."
+            >
+              <Switch
+                checked={coloredToolIcons}
+                onCheckedChange={onColoredToolIconsChange}
+                disabled={!showToolIcons}
               />
             </SettingRow>
 
@@ -266,18 +321,41 @@ export const AppearanceSettings = memo(function AppearanceSettings({
             </div>
 
             <SettingRow
-              label="Window transparency"
+              label={isMac ? "Window background effect" : "Window transparency"}
               description={
-                glassSupported
-                  ? "Allow the desktop to show through the window background. Uses Liquid Glass on macOS or Mica on Windows."
-                  : "Window transparency is not available on this platform."
+                isMac
+                  ? (
+                    macLiquidGlassSupported
+                      ? "Choose the native macOS background material. Liquid Glass can be enabled immediately; switching away from it may need a quick reopen to fully clear the native view."
+                      : "Choose the native macOS background material. Liquid Glass is unavailable on this Mac, so Vibrancy and Off are available."
+                  )
+                  : (
+                    glassSupported
+                      ? "Allow the desktop to show through the window background. Uses Mica on Windows when enabled."
+                      : "Window transparency is not available on this platform."
+                  )
               }
             >
-              <Switch
-                checked={transparency}
-                onCheckedChange={onTransparencyChange}
-                disabled={!glassSupported}
-              />
+              {isMac ? (
+                <SettingsSelect
+                  value={effectiveMacBackgroundEffect}
+                  onValueChange={(value) => onMacBackgroundEffectChange(value as MacBackgroundEffect)}
+                  options={[
+                    ...(macLiquidGlassSupported
+                      ? [{ value: "liquid-glass", label: "Liquid Glass" }]
+                      : []),
+                    { value: "vibrancy", label: "Vibrancy" },
+                    { value: "off", label: "Blur Off" },
+                  ]}
+                  className="min-w-[9.5rem]"
+                />
+              ) : (
+                <Switch
+                  checked={transparency}
+                  onCheckedChange={onTransparencyChange}
+                  disabled={!glassSupported}
+                />
+              )}
             </SettingRow>
 
             <SettingRow

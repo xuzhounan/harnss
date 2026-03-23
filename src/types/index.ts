@@ -66,6 +66,7 @@ export type {
   McpServerStatusState,
   McpServerStatus,
   ThemeOption,
+  MacBackgroundEffect,
 } from "./ui";
 
 export type {

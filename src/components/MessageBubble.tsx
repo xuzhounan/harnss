@@ -19,6 +19,12 @@ import { ThinkingBlock } from "./ThinkingBlock";
 import { CopyButton } from "./CopyButton";
 import { ImageLightbox } from "./ImageLightbox";
 import { MermaidDiagram } from "./MermaidDiagram";
+import {
+  CHAT_CONTENT_STACK_CLASS,
+  CHAT_PROSE_EDGE_CLASS,
+  CHAT_ROW_CLASS,
+  CHAT_ROW_WIDTH_CLASS,
+} from "@/components/lib/chat-layout";
 
 // Stable references to avoid re-creating on every render
 const REMARK_PLUGINS = [remarkGfm];
@@ -157,6 +163,7 @@ function renderWithMentions(text: string): ReactNode[] {
 interface MessageBubbleProps {
   message: UIMessage;
   showThinking?: boolean;
+  assistantTurnDividerLabel?: string;
   isContinuation?: boolean;
   /** True when this queued message is the prioritized "send next" item */
   isSendNextQueued?: boolean;
@@ -173,6 +180,7 @@ interface MessageBubbleProps {
 export const MessageBubble = memo(function MessageBubble({
   message,
   showThinking = true,
+  assistantTurnDividerLabel,
   isContinuation,
   isSendNextQueued = false,
   onRevert,
@@ -213,7 +221,7 @@ export const MessageBubble = memo(function MessageBubble({
     const checkpointId = message.checkpointId;
     const canRevert = !!checkpointId && (!!onRevert || !!onFullRevert);
     return (
-      <div className={cn("group/user flex justify-end px-4 py-1.5", message.isQueued && "opacity-60")}>
+      <div className={cn("group/user flex justify-end", CHAT_ROW_CLASS, message.isQueued && "opacity-60")}>
         <div className={cn("relative max-w-[80%]", canRevert && "pb-5")}>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -327,35 +335,51 @@ export const MessageBubble = memo(function MessageBubble({
   }
 
   return (
-    <div className={`flex justify-start px-4 ${isContinuation ? "py-0.5" : "py-1.5"}`}>
+    <div
+      className={cn("flex justify-start", CHAT_ROW_CLASS)}
+      data-continuation={isContinuation || undefined}
+    >
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="flow-root min-w-0 max-w-[85%] wrap-break-word">
-            {showThinking && message.thinking && (
-              <div className={message.content ? "mb-2" : undefined}>
-                <ThinkingBlock
-                  thinking={message.thinking}
-                  isStreaming={message.isStreaming}
-                  thinkingComplete={message.thinkingComplete}
-                  storageKey={`thinking:${message.id}`}
-                />
-              </div>
-            )}
-            {message.content ? (
-              <div
-                ref={proseRef}
-                className="flow-root prose dark:prose-invert prose-sm max-w-none text-foreground [&_li::marker]:text-foreground dark:[&_li::marker]:text-foreground/70"
-              >
-                <IsStreamingMarkdownContext.Provider value={!!message.isStreaming}>
-                  <ReactMarkdown
-                    remarkPlugins={REMARK_PLUGINS}
-                    components={MD_COMPONENTS}
-                  >
-                    {message.content}
-                  </ReactMarkdown>
-                </IsStreamingMarkdownContext.Provider>
+          <div className={cn(CHAT_ROW_WIDTH_CLASS, assistantTurnDividerLabel && "w-full")}>
+            <div className={cn("flow-root wrap-break-word", CHAT_CONTENT_STACK_CLASS, assistantTurnDividerLabel ? "w-full" : "min-w-0")}>
+            {assistantTurnDividerLabel ? (
+              <div className="relative mb-3 w-full text-center text-[11px] text-muted-foreground/70">
+                <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-foreground/[0.08]" />
+                <span className="relative inline-block bg-background px-3 font-medium">
+                  {assistantTurnDividerLabel}
+                </span>
               </div>
             ) : null}
+              <div className={assistantTurnDividerLabel ? "inline-block min-w-0 max-w-full" : undefined}>
+                {showThinking && message.thinking && (
+                  <ThinkingBlock
+                    thinking={message.thinking}
+                    isStreaming={message.isStreaming}
+                    thinkingComplete={message.thinkingComplete}
+                    storageKey={`thinking:${message.id}`}
+                  />
+                )}
+                {message.content ? (
+                  <div
+                    ref={proseRef}
+                    className={cn(
+                      "flow-root prose dark:prose-invert prose-sm max-w-none text-foreground [&_li::marker]:text-foreground dark:[&_li::marker]:text-foreground/70",
+                      CHAT_PROSE_EDGE_CLASS,
+                    )}
+                  >
+                    <IsStreamingMarkdownContext.Provider value={!!message.isStreaming}>
+                      <ReactMarkdown
+                        remarkPlugins={REMARK_PLUGINS}
+                        components={MD_COMPONENTS}
+                      >
+                        {message.content}
+                      </ReactMarkdown>
+                    </IsStreamingMarkdownContext.Provider>
+                  </div>
+                ) : null}
+              </div>
+            </div>
           </div>
         </TooltipTrigger>
         <TooltipContent side="right">
@@ -373,6 +397,7 @@ export const MessageBubble = memo(function MessageBubble({
   prev.message.isError === next.message.isError &&
   prev.message.checkpointId === next.message.checkpointId &&
   prev.message.isQueued === next.message.isQueued &&
+  prev.assistantTurnDividerLabel === next.assistantTurnDividerLabel &&
   prev.isSendNextQueued === next.isSendNextQueued &&
   prev.showThinking === next.showThinking &&
   prev.isContinuation === next.isContinuation &&

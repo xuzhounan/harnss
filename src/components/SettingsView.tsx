@@ -25,7 +25,7 @@ import { PlaceholderSection } from "@/components/settings/PlaceholderSection";
 import { AboutSettings } from "@/components/settings/AboutSettings";
 import { AnalyticsSettings } from "@/components/settings/AnalyticsSettings";
 import { isMac } from "@/lib/utils";
-import type { InstalledAgent, ThemeOption } from "@/types";
+import type { InstalledAgent, MacBackgroundEffect, ThemeOption } from "@/types";
 import type { AppSettings } from "@/types/ui";
 
 // ── Section definitions ──
@@ -67,19 +67,28 @@ interface SettingsViewProps {
   onIslandLayoutChange: (enabled: boolean) => void;
   islandShine: boolean;
   onIslandShineChange: (enabled: boolean) => void;
+  macBackgroundEffect: MacBackgroundEffect;
+  onMacBackgroundEffectChange: (effect: MacBackgroundEffect) => void;
   autoGroupTools: boolean;
   onAutoGroupToolsChange: (enabled: boolean) => void;
   avoidGroupingEdits: boolean;
   onAvoidGroupingEditsChange: (enabled: boolean) => void;
   autoExpandTools: boolean;
   onAutoExpandToolsChange: (enabled: boolean) => void;
+  expandEditToolCallsByDefault: boolean;
+  onExpandEditToolCallsByDefaultChange: (enabled: boolean) => void;
   transparentToolPicker: boolean;
   onTransparentToolPickerChange: (enabled: boolean) => void;
   coloredSidebarIcons: boolean;
   onColoredSidebarIconsChange: (enabled: boolean) => void;
+  showToolIcons: boolean;
+  onShowToolIconsChange: (enabled: boolean) => void;
+  coloredToolIcons: boolean;
+  onColoredToolIconsChange: (enabled: boolean) => void;
   transparency: boolean;
   onTransparencyChange: (enabled: boolean) => void;
   glassSupported: boolean;
+  macLiquidGlassSupported: boolean;
   sidebarOpen?: boolean;
   onToggleSidebar?: () => void;
   /** Resets the welcome wizard so it shows again. Dev-only. */
@@ -99,19 +108,28 @@ export const SettingsView = memo(function SettingsView({
   onIslandLayoutChange,
   islandShine,
   onIslandShineChange,
+  macBackgroundEffect,
+  onMacBackgroundEffectChange,
   autoGroupTools,
   onAutoGroupToolsChange,
   avoidGroupingEdits,
   onAvoidGroupingEditsChange,
   autoExpandTools,
   onAutoExpandToolsChange,
+  expandEditToolCallsByDefault,
+  onExpandEditToolCallsByDefaultChange,
   transparentToolPicker,
   onTransparentToolPickerChange,
   coloredSidebarIcons,
   onColoredSidebarIconsChange,
+  showToolIcons,
+  onShowToolIconsChange,
+  coloredToolIcons,
+  onColoredToolIconsChange,
   transparency,
   onTransparencyChange,
   glassSupported,
+  macLiquidGlassSupported,
   sidebarOpen = false,
   onToggleSidebar,
   onReplayWelcome,
@@ -161,19 +179,29 @@ export const SettingsView = memo(function SettingsView({
             onIslandLayoutChange={onIslandLayoutChange}
             islandShine={islandShine}
             onIslandShineChange={onIslandShineChange}
+            macBackgroundEffect={macBackgroundEffect}
+            onMacBackgroundEffectChange={onMacBackgroundEffectChange}
             autoGroupTools={autoGroupTools}
             onAutoGroupToolsChange={onAutoGroupToolsChange}
             avoidGroupingEdits={avoidGroupingEdits}
             onAvoidGroupingEditsChange={onAvoidGroupingEditsChange}
             autoExpandTools={autoExpandTools}
             onAutoExpandToolsChange={onAutoExpandToolsChange}
+            expandEditToolCallsByDefault={expandEditToolCallsByDefault}
+            onExpandEditToolCallsByDefaultChange={onExpandEditToolCallsByDefaultChange}
             transparentToolPicker={transparentToolPicker}
             onTransparentToolPickerChange={onTransparentToolPickerChange}
             coloredSidebarIcons={coloredSidebarIcons}
             onColoredSidebarIconsChange={onColoredSidebarIconsChange}
+            showToolIcons={showToolIcons}
+            onShowToolIconsChange={onShowToolIconsChange}
+            coloredToolIcons={coloredToolIcons}
+            onColoredToolIconsChange={onColoredToolIconsChange}
             transparency={transparency}
             onTransparencyChange={onTransparencyChange}
             glassSupported={glassSupported}
+            isMac={isMac}
+            macLiquidGlassSupported={macLiquidGlassSupported}
           />
         );
       case "notifications":
@@ -241,7 +269,7 @@ export const SettingsView = memo(function SettingsView({
       default:
         return null;
     }
-  }, [activeSection, appSettings, updateAppSettings, agents, onSaveAgent, onDeleteAgent, theme, onThemeChange, islandLayout, onIslandLayoutChange, islandShine, onIslandShineChange, autoGroupTools, onAutoGroupToolsChange, avoidGroupingEdits, onAvoidGroupingEditsChange, autoExpandTools, onAutoExpandToolsChange, transparentToolPicker, onTransparentToolPickerChange, coloredSidebarIcons, onColoredSidebarIconsChange, transparency, onTransparencyChange, glassSupported, onReplayWelcome]);
+  }, [activeSection, appSettings, updateAppSettings, agents, onSaveAgent, onDeleteAgent, theme, onThemeChange, islandLayout, onIslandLayoutChange, islandShine, onIslandShineChange, macBackgroundEffect, onMacBackgroundEffectChange, autoGroupTools, onAutoGroupToolsChange, avoidGroupingEdits, onAvoidGroupingEditsChange, autoExpandTools, onAutoExpandToolsChange, expandEditToolCallsByDefault, onExpandEditToolCallsByDefaultChange, transparentToolPicker, onTransparentToolPickerChange, coloredSidebarIcons, onColoredSidebarIconsChange, showToolIcons, onShowToolIconsChange, coloredToolIcons, onColoredToolIconsChange, transparency, onTransparencyChange, glassSupported, macLiquidGlassSupported, onReplayWelcome]);
 
   return (
     <div className={`island flex flex-1 flex-col overflow-hidden bg-background ${islandLayout ? "rounded-[var(--island-radius)]" : "rounded-none"}`}>

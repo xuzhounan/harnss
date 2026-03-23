@@ -11,6 +11,7 @@ import {
   createThinkingAnimationState,
 } from "@/lib/thinking-animation";
 import { useChatPersistedState } from "@/components/chat-ui-state";
+import { CHAT_COLLAPSIBLE_CONTENT_CLASS } from "@/components/lib/chat-layout";
 
 interface ThinkingBlockProps {
   thinking: string;
@@ -89,11 +90,11 @@ export function ThinkingBlock({
       </CollapsibleTrigger>
       {/* Only render expandable content when there's actual thinking text */}
       {thinking.length > 0 && (
-        <CollapsibleContent>
+        <CollapsibleContent className={CHAT_COLLAPSIBLE_CONTENT_CLASS}>
           <div
             ref={contentRef}
             onScroll={handleScroll}
-            className="mt-1 mb-2 max-h-60 overflow-auto border-s-2 border-foreground/10 ps-3 py-1 text-xs text-foreground/40 whitespace-pre-wrap"
+            className="max-h-60 overflow-auto border-s-2 border-foreground/10 ps-3 py-1 text-xs text-foreground/40 whitespace-pre-wrap"
           >
             {animationState.baseText}
             {animationState.animatedChunks.map((chunk) => (

@@ -18,9 +18,7 @@ import {
   FolderPlus,
   Type,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -193,8 +191,9 @@ export const ProjectFilesPanel = memo(function ProjectFilesPanel({
     return (
       <div className="flex h-full flex-col">
         <PanelHeader icon={FolderTree} label="Project Files" iconClass="text-teal-600/70 dark:text-teal-200/50" />
-        <div className="flex flex-1 items-center justify-center p-4">
-          <p className="text-xs text-muted-foreground">No project selected</p>
+        <div className="flex flex-1 flex-col items-center justify-center gap-1">
+          <FolderTree className="h-3.5 w-3.5 text-foreground/15" />
+          <p className="text-[10px] text-foreground/30">No project selected</p>
         </div>
       </div>
     );
@@ -204,59 +203,54 @@ export const ProjectFilesPanel = memo(function ProjectFilesPanel({
     <div className="flex h-full flex-col">
       <PanelHeader icon={FolderTree} label="Project Files" iconClass="text-teal-600/70 dark:text-teal-200/50">
         {totalFiles > 0 && (
-          <Badge variant="secondary" className="h-5 rounded-full px-2 text-[10px] font-semibold tabular-nums">
-            {totalFiles}
-          </Badge>
+          <span className="text-[10px] tabular-nums text-foreground/35">{totalFiles}</span>
         )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={refresh}
-              className="inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-md
-                text-muted-foreground/50 transition-all duration-150
-                hover:text-muted-foreground hover:bg-foreground/[0.06]
-                active:scale-90"
-            >
-              <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" sideOffset={4}>
-            <p className="text-xs">Refresh files</p>
-          </TooltipContent>
-        </Tooltip>
+        <button
+          type="button"
+          onClick={refresh}
+          className="inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-md
+            text-foreground/35 transition-colors
+            hover:text-foreground/60 hover:bg-foreground/[0.06]"
+          title="Refresh files"
+        >
+          <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
+        </button>
       </PanelHeader>
 
       {/* Search bar */}
-      <div className="flex items-center gap-1.5 border-b border-foreground/[0.08] px-3 py-1.5">
-        <Search className="h-3 w-3 shrink-0 text-muted-foreground/50" />
+      <div className="flex items-center gap-1.5 px-3 py-1">
+        <Search className="h-3 w-3 shrink-0 text-foreground/25" />
         <input
           type="text"
           value={searchQuery}
           onChange={(e) => handleSearchChange(e.target.value)}
-          placeholder="Search files..."
-          className="h-5 w-full bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground/40"
+          placeholder="Search files…"
+          className="h-5 w-full bg-transparent text-[11px] text-foreground/75 outline-none placeholder:text-foreground/25"
         />
+      </div>
+      <div className="mx-2">
+        <div className="h-px bg-foreground/[0.06]" />
       </div>
 
       {/* Tree content */}
       <ScrollArea className="flex-1 min-h-0">
         {loading && !tree && (
-          <div className="flex items-center justify-center p-8">
-            <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground/50" />
+          <div className="flex flex-col items-center justify-center gap-1 py-6">
+            <RefreshCw className="h-3 w-3 animate-spin text-foreground/25" />
+            <p className="text-[10px] text-foreground/30">Loading…</p>
           </div>
         )}
 
         {error && (
-          <div className="p-4">
-            <p className="text-xs text-destructive">{error}</p>
+          <div className="px-3 py-2">
+            <p className="text-[10px] text-destructive">{error}</p>
           </div>
         )}
 
         {flatItems.length === 0 && !loading && !error && tree && (
-          <div className="flex items-center justify-center p-8">
-            <p className="text-xs text-muted-foreground/50">
-              {debouncedQuery ? `No files matching "${debouncedQuery}"` : "No files found"}
+          <div className="flex items-center justify-center py-6">
+            <p className="text-[10px] text-foreground/30">
+              {debouncedQuery ? `No matches for "${debouncedQuery}"` : "No files found"}
             </p>
           </div>
         )}
@@ -397,10 +391,18 @@ const FileTreeRow = memo(function FileTreeRow({
   const [renameName, setRenameName] = useState(node.name);
   // Track cursor position so the menu opens where the user right-clicked.
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
+  const suppressClickUntilRef = useRef(0);
   const rowRef = useRef<HTMLDivElement>(null);
+
+  const suppressRowClick = useCallback((durationMs = 150) => {
+    suppressClickUntilRef.current = Date.now() + durationMs;
+  }, []);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
+      if (Date.now() < suppressClickUntilRef.current) {
+        return;
+      }
       if (isDir) {
         onToggleDir(node.path);
       } else {
@@ -575,7 +577,15 @@ const FileTreeRow = memo(function FileTreeRow({
         </span>
 
         {/* Context menu — anchored to a 0×0 element at the cursor position */}
-        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+        <DropdownMenu
+          open={menuOpen}
+          onOpenChange={(open) => {
+            if (!open) {
+              suppressRowClick();
+            }
+            setMenuOpen(open);
+          }}
+        >
           <DropdownMenuTrigger asChild>
             <span style={anchorStyle} />
           </DropdownMenuTrigger>

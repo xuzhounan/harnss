@@ -18,12 +18,23 @@ interface PreloadGlobals {
 }
 
 type ThemeSource = "system" | "light" | "dark";
+type MacBackgroundEffect = "liquid-glass" | "vibrancy" | "off";
 
 function readStoredThemeSource(storage: PreloadStorage | undefined): ThemeSource {
   const stored = storage?.getItem("harnss-theme");
   return stored === "light" || stored === "dark" || stored === "system"
     ? stored
     : "dark";
+}
+
+function readStoredMacBackgroundEffect(storage: PreloadStorage | undefined): MacBackgroundEffect {
+  const stored = storage?.getItem("harnss-mac-background-effect");
+  if (stored === "liquid-glass" || stored === "vibrancy" || stored === "off") {
+    return stored;
+  }
+
+  const transparencySetting = storage?.getItem("harnss-transparency") ?? null;
+  return transparencySetting === "false" ? "off" : "liquid-glass";
 }
 
 // Early setup wrapped in try/catch so contextBridge.exposeInMainWorld always runs
@@ -37,16 +48,19 @@ try {
   // On Windows, glass support does not mean the user has transparency enabled.
   root?.classList.add(`platform-${process.platform}`);
   ipcRenderer.send("app:set-theme-source", themeSource);
-  ipcRenderer.invoke("app:getGlassSupported").then((supported: boolean) => {
-    if (!supported || !root) return;
-
-    const transparencySetting = globals.localStorage?.getItem("harnss-transparency") ?? null;
-    const transparencyEnabled = transparencySetting === null || transparencySetting === "true";
-
-    if (transparencyEnabled) {
-      root.classList.add("glass-enabled");
-    }
-  });
+  const transparencyEnabled = process.platform === "darwin"
+    ? readStoredMacBackgroundEffect(globals.localStorage) !== "off"
+    : (globals.localStorage?.getItem("harnss-transparency") ?? null) !== "false";
+  const canUseTransparentWindow = process.platform === "darwin" || process.platform === "win32";
+  if (canUseTransparentWindow && transparencyEnabled) {
+    root?.classList.add("glass-enabled");
+  }
+  if (process.platform === "darwin") {
+    ipcRenderer.send(
+      "app:set-mac-background-effect",
+      readStoredMacBackgroundEffect(globals.localStorage),
+    );
+  }
 
   // Push stored theme to main process early so glass appearance is correct
   // before React mounts. Default to "dark" to match useSettings, which falls
@@ -63,7 +77,10 @@ try {
 
 contextBridge.exposeInMainWorld("claude", {
   getGlassSupported: () => ipcRenderer.invoke("app:getGlassSupported"),
+  getMacBackgroundEffectSupport: () => ipcRenderer.invoke("app:get-mac-background-effect-support"),
   setThemeSource: (themeSource: ThemeSource) => ipcRenderer.send("app:set-theme-source", themeSource),
+  setMacBackgroundEffect: (effect: MacBackgroundEffect) => ipcRenderer.send("app:set-mac-background-effect", effect),
+  relaunchApp: () => ipcRenderer.invoke("app:relaunch"),
   setMinWidth: (width: number) => ipcRenderer.send("app:set-min-width", width),
   glass: {
     setTintColor: (tintColor: string | null) =>
@@ -128,6 +145,8 @@ contextBridge.exposeInMainWorld("claude", {
   newFile: (filePath: string) => ipcRenderer.invoke("file:new-file", filePath),
   newFolder: (folderPath: string) => ipcRenderer.invoke("file:new-folder", folderPath),
   writeClipboardText: (text: string) => ipcRenderer.invoke("clipboard:write-text", text),
+  setBrowserColorScheme: (targetWebContentsId: number, colorScheme: "light" | "dark") =>
+    ipcRenderer.invoke("browser:set-color-scheme", { targetWebContentsId, colorScheme }),
   openInEditor: (filePath: string, line?: number, editor?: string) => ipcRenderer.invoke("file:open-in-editor", { filePath, line, editor }),
   openExternal: (url: string) => ipcRenderer.invoke("shell:open-external", url),
   showItemInFolder: (filePath: string) => ipcRenderer.invoke("shell:show-item-in-folder", filePath),

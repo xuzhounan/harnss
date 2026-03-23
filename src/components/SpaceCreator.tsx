@@ -2,7 +2,9 @@ import { useState, useEffect, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
+  DialogTitle,
 } from "@/components/ui/dialog";
+import { VisuallyHidden } from "radix-ui";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -140,7 +142,11 @@ export function SpaceCreator({ open, onOpenChange, editingSpace, onSave }: Space
       <DialogContent
         className="max-w-sm max-h-[calc(100dvh-3rem)] flex flex-col gap-0 p-0 overflow-hidden"
         showCloseButton={false}
+        aria-describedby={undefined}
       >
+        <VisuallyHidden.Root>
+          <DialogTitle>{isEditing ? "Edit Space" : "New Space"}</DialogTitle>
+        </VisuallyHidden.Root>
         {/* ── Hero preview — live color/icon/name preview ── */}
         <div
           className="relative flex flex-col items-center justify-center shrink-0 px-6 pt-9 pb-6"

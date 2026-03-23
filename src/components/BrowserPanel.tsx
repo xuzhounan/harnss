@@ -1,13 +1,14 @@
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type FormEvent } from "react";
 import type { GrabbedElement } from "@/types/ui";
 import { getInspectorScript, getCleanupScript, GRAB_MARKER } from "@/lib/element-inspector";
-import { capture } from "@/lib/analytics";
+import { capture, reportError } from "@/lib/analytics";
 
 // Electron webview element with navigation methods
 interface ElectronWebviewElement extends HTMLElement {
   src: string;
   getURL(): string;
   getTitle(): string;
+  getWebContentsId(): number;
   loadURL(url: string): Promise<void>;
   goBack(): void;
   goForward(): void;
@@ -16,6 +17,9 @@ interface ElectronWebviewElement extends HTMLElement {
   canGoBack(): boolean;
   canGoForward(): boolean;
   executeJavaScript(code: string): Promise<unknown>;
+  openDevTools(options?: DevToolsOpenOptions): void;
+  closeDevTools(): void;
+  isDevToolsOpened(): boolean;
 }
 
 import {
@@ -27,13 +31,12 @@ import {
   Lock,
   Loader2,
   Crosshair,
-  Eye,
-  Sparkles,
   Search,
   ArrowUpRight,
+  Bug,
+  Sun,
+  Moon,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TabBar } from "@/components/TabBar";
 
 interface BrowserTab {
@@ -42,6 +45,7 @@ interface BrowserTab {
   title: string;
   label: string;
   isLoading: boolean;
+  colorScheme: BrowserColorScheme;
   isStartPage?: boolean;
 }
 
@@ -50,12 +54,23 @@ interface BrowserHistoryEntry {
   title: string;
 }
 
+interface DevToolsOpenOptions {
+  mode?: "detach";
+  activate?: boolean;
+}
+
+type BrowserColorScheme = "light" | "dark";
+
 interface BrowserPanelProps {
   onElementGrab?: (element: GrabbedElement) => void;
 }
 
 const BROWSER_HISTORY_KEY = "harnss-browser-history";
 const MAX_BROWSER_HISTORY = 100;
+
+function getDefaultBrowserColorScheme(): BrowserColorScheme {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
 
 function normalizeHistoryUrl(raw: string): string | null {
   const url = raw.trim();
@@ -88,6 +103,19 @@ function resolveNavigationInput(input: string): string | null {
   }
 
   return url;
+}
+
+function reorderTabsById(tabs: BrowserTab[], fromTabId: string, toTabId: string): BrowserTab[] {
+  const fromIndex = tabs.findIndex((tab) => tab.id === fromTabId);
+  const toIndex = tabs.findIndex((tab) => tab.id === toTabId);
+  if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) {
+    return tabs;
+  }
+
+  const nextTabs = [...tabs];
+  const [movedTab] = nextTabs.splice(fromIndex, 1);
+  nextTabs.splice(toIndex, 0, movedTab);
+  return nextTabs;
 }
 
 const BrowserHeaderIcon = forwardRef<SVGSVGElement, React.ComponentPropsWithoutRef<typeof Globe>>(
@@ -156,6 +184,7 @@ export function BrowserPanel({ onElementGrab }: BrowserPanelProps) {
       title: "New Tab",
       label: "New Tab",
       isLoading: !isStartPage,
+      colorScheme: getDefaultBrowserColorScheme(),
       isStartPage,
     };
     setTabs((prev) => [...prev, tab]);
@@ -223,6 +252,10 @@ export function BrowserPanel({ onElementGrab }: BrowserPanelProps) {
     }));
   }, []);
 
+  const reorderTabs = useCallback((fromTabId: string, toTabId: string) => {
+    setTabs((prev) => reorderTabsById(prev, fromTabId, toTabId));
+  }, []);
+
   return (
     <div className="flex h-full flex-col">
       {/* Tab bar */}
@@ -244,6 +277,7 @@ export function BrowserPanel({ onElementGrab }: BrowserPanelProps) {
         tabMaxWidth="max-w-24"
         activeClass="bg-foreground/[0.08] text-foreground/80"
         inactiveClass="text-foreground/35 hover:text-foreground/55 hover:bg-foreground/[0.04]"
+        onReorderTabs={reorderTabs}
       />
 
       {/* Webview content */}
@@ -324,121 +358,94 @@ function BrowserStartPage({
   onOpen: (value: string) => void;
   recentHistory: BrowserHistoryEntry[];
 }) {
-  const [isFocused, setIsFocused] = useState(false);
-
   return (
-    <div className="relative flex h-full items-center justify-center overflow-y-auto overflow-x-hidden px-6">
-      {/* Atmospheric ambient glow — breathes on focus */}
-      <div
-        className="pointer-events-none absolute top-[38%] left-1/2 h-[280px] w-[420px] rounded-full bg-blue-500/[0.03] blur-[100px] dark:bg-blue-400/[0.05]"
-        style={{
-          opacity: isFocused ? 1 : 0.3,
-          transform: `translate(-50%, -50%) scale(${isFocused ? 1.15 : 1})`,
-          transition: "opacity 800ms cubic-bezier(0.4, 0, 0.2, 1), transform 800ms cubic-bezier(0.4, 0, 0.2, 1)",
-        }}
-      />
-
+    <div className="h-full overflow-y-auto overflow-x-hidden">
+      <div className="flex min-h-full flex-col items-center justify-center px-4 py-6">
       <form
         onSubmit={(e) => {
           e.preventDefault();
+          setShowSuggestions(false);
+          const form = e.currentTarget;
+          const active = document.activeElement;
+          if (active instanceof HTMLElement && form.contains(active)) {
+            active.blur();
+          }
           onOpen(input);
         }}
-        className="relative z-10 w-full max-w-md"
+        className="w-full max-w-sm"
       >
-        <div className="flex flex-col items-center gap-7">
-          {/* Hero — icon + title */}
-          <div className="flex flex-col items-center gap-3.5">
-            <div className="rounded-2xl border border-foreground/[0.06] bg-foreground/[0.025] p-3.5">
-              <Globe className="h-6 w-6 text-foreground/30" />
+        {/* Search bar */}
+        <div className="relative">
+          <div className="flex items-center gap-2 rounded-md border border-foreground/[0.08] bg-foreground/[0.03] px-2.5 py-1.5 transition-colors focus-within:border-foreground/[0.15] focus-within:bg-foreground/[0.05]">
+            <Search className="h-3.5 w-3.5 shrink-0 text-foreground/25" />
+
+            <div className="relative min-w-0 flex-1">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  setShowSuggestions(true);
+                }}
+                onMouseDown={(e) => {
+                  if (document.activeElement === e.currentTarget) {
+                    setShowSuggestions(true);
+                  }
+                }}
+                onBlur={() => {
+                  window.setTimeout(() => setShowSuggestions(false), 120);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setShowSuggestions(false);
+                    (e.target as HTMLInputElement).blur();
+                    return;
+                  }
+                  if (e.key === "Tab" && completion) {
+                    e.preventDefault();
+                    setInput(completion);
+                  }
+                }}
+                className="w-full bg-transparent text-[12px] text-foreground/80 outline-none placeholder:text-foreground/25"
+                placeholder="Search or enter URL…"
+                spellCheck={false}
+                autoFocus
+              />
+              {completion && input.trim() && (
+                <div className="pointer-events-none absolute inset-0 flex items-center overflow-hidden text-[12px]">
+                  <span className="invisible whitespace-pre">{input}</span>
+                  <span className="text-foreground/[0.12]">{completion.slice(input.length)}</span>
+                </div>
+              )}
             </div>
-            <div className="text-center">
-              <h2 className="text-[15px] font-semibold tracking-tight text-foreground/80">
-                Browse the web
-              </h2>
-              <p className="mt-1 text-[12px] leading-relaxed text-foreground/35">
-                Preview, inspect, and grab elements into your conversation
-              </p>
-            </div>
+
+            {completion && input.trim() && (
+              <kbd className="shrink-0 rounded border border-foreground/[0.06] bg-foreground/[0.03] px-1 py-px text-[9px] font-medium text-foreground/20">
+                Tab
+              </kbd>
+            )}
+
+            {input.trim() && (
+              <button
+                type="submit"
+                className="shrink-0 rounded p-1 text-foreground/30 transition-colors hover:bg-foreground/[0.08] hover:text-foreground/60"
+              >
+                <ArrowUpRight className="h-3 w-3" />
+              </button>
+            )}
           </div>
 
-          {/* Search bar — hero element with glow border */}
-          <div className="relative w-full">
-            {/* Gradient glow ring — visible on focus */}
-            <div
-              className="absolute -inset-px rounded-xl bg-gradient-to-r from-blue-500/20 via-indigo-400/15 to-blue-500/20 blur-[1px]"
-              style={{
-                opacity: isFocused ? 1 : 0,
-                transition: "opacity 500ms cubic-bezier(0.4, 0, 0.2, 1)",
-              }}
-            />
-
-            <div className="relative flex items-center gap-2.5 rounded-xl border border-foreground/[0.08] bg-foreground/[0.03] px-3.5 py-2.5 transition-all duration-300 focus-within:border-foreground/[0.14] focus-within:bg-foreground/[0.04]">
-              <Search className="h-4 w-4 shrink-0 text-foreground/25" />
-
-              <div className="relative min-w-0 flex-1">
-                <input
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onFocus={() => {
-                    setIsFocused(true);
-                    setShowSuggestions(true);
-                  }}
-                  onBlur={() => {
-                    setIsFocused(false);
-                    window.setTimeout(() => setShowSuggestions(false), 120);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape") {
-                      setShowSuggestions(false);
-                      (e.target as HTMLInputElement).blur();
-                      return;
-                    }
-                    if (e.key === "Tab" && completion) {
-                      e.preventDefault();
-                      setInput(completion);
-                    }
-                  }}
-                  className="w-full bg-transparent text-sm text-foreground/80 outline-none placeholder:text-foreground/20"
-                  placeholder="Search or enter URL…"
-                  spellCheck={false}
-                  autoFocus
-                />
-                {/* Ghost text completion overlay */}
-                {completion && input.trim() && (
-                  <div className="pointer-events-none absolute inset-0 flex items-center overflow-hidden text-sm">
-                    <span className="invisible whitespace-pre">{input}</span>
-                    <span className="text-foreground/[0.12]">{completion.slice(input.length)}</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Tab hint */}
-              {completion && input.trim() && (
-                <kbd className="shrink-0 rounded border border-foreground/[0.08] bg-foreground/[0.04] px-1.5 py-0.5 text-[10px] font-medium text-foreground/25">
-                  Tab
-                </kbd>
-              )}
-
-              {/* Go button — appears when input has content */}
-              {input.trim() && (
-                <button
-                  type="submit"
-                  className="shrink-0 rounded-lg bg-foreground/[0.06] p-1.5 text-foreground/35 transition-colors hover:bg-foreground/[0.12] hover:text-foreground/60"
-                >
-                  <ArrowUpRight className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
-
-            {/* URL suggestions dropdown */}
-            {showSuggestions && filteredHistory.length > 0 && (
-              <div className="absolute inset-x-0 top-[calc(100%+6px)] z-20 max-h-52 overflow-y-auto rounded-xl border border-foreground/[0.08] bg-background/95 py-1.5 shadow-lg backdrop-blur-sm">
-                {filteredHistory.map((entry) => (
+          {/* Suggestions dropdown */}
+          {showSuggestions && filteredHistory.length > 0 && (
+            <div className="absolute inset-x-0 top-[calc(100%+4px)] z-20 max-h-48 overflow-y-auto rounded-lg border border-foreground/[0.1] bg-[var(--background)] shadow-lg">
+              {filteredHistory.map((entry) => {
+                let hostname = entry.url;
+                try { hostname = new URL(entry.url).hostname.replace(/^www\./, ""); } catch { /* keep */ }
+                return (
                   <button
                     key={entry.url}
                     type="button"
-                    className="flex w-full items-center gap-2.5 px-3.5 py-1.5 text-start transition-colors hover:bg-foreground/[0.04]"
+                    className="flex w-full items-center gap-2 px-2.5 py-1 text-start transition-colors hover:bg-foreground/[0.04]"
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
                       setInput(entry.url);
@@ -447,80 +454,43 @@ function BrowserStartPage({
                     }}
                   >
                     <Globe className="h-3 w-3 shrink-0 text-foreground/20" />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs text-foreground/70">{entry.title}</div>
-                      <div className="truncate text-[11px] text-foreground/25">{entry.url}</div>
-                    </div>
+                    <span className="min-w-0 flex-1 truncate text-[11px] text-foreground/65">{entry.title}</span>
+                    <span className="shrink-0 truncate text-[10px] text-foreground/20 max-w-32">{hostname}</span>
                   </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Feature indicators — minimal horizontal list, wraps at narrow widths */}
-          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-[11px] text-foreground/30">
-            <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-              <Eye className="h-3 w-3 shrink-0" />
-              Preview
-            </span>
-            <span className="h-3 w-px bg-foreground/[0.08]" />
-            <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-              <Crosshair className="h-3 w-3 shrink-0" />
-              Inspect
-            </span>
-            <span className="h-3 w-px bg-foreground/[0.08]" />
-            <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-              <Sparkles className="h-3 w-3 shrink-0" />
-              Use in chat
-            </span>
-          </div>
-
-          {/* Recent sites — letter avatars with hover arrows */}
-          {recentHistory.length > 0 && (
-            <div className="w-full pt-1">
-              <div className="mb-2.5 flex items-center gap-3">
-                <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-foreground/25">
-                  Recent
-                </span>
-                <div className="h-px flex-1 bg-foreground/[0.05]" />
-              </div>
-              <div className="grid gap-0.5 sm:grid-cols-2">
-                {recentHistory.map((entry) => {
-                  let hostname = entry.url;
-                  let letter = "?";
-                  try {
-                    hostname = new URL(entry.url).hostname.replace(/^www\./, "");
-                    letter = hostname.charAt(0).toUpperCase();
-                  } catch {
-                    /* keep defaults */
-                  }
-                  return (
-                    <button
-                      key={`recent-${entry.url}`}
-                      type="button"
-                      className="group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-start transition-colors hover:bg-foreground/[0.035]"
-                      onClick={() => onOpen(entry.url)}
-                    >
-                      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-foreground/[0.05] text-[11px] font-semibold text-foreground/30 transition-colors group-hover:bg-foreground/[0.08] group-hover:text-foreground/50">
-                        {letter}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-[12px] font-medium text-foreground/60 transition-colors group-hover:text-foreground/80">
-                          {entry.title}
-                        </div>
-                        <div className="truncate text-[10px] text-foreground/20">
-                          {hostname}
-                        </div>
-                      </div>
-                      <ArrowUpRight className="h-3 w-3 shrink-0 text-foreground/0 transition-all duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-foreground/25" />
-                    </button>
-                  );
-                })}
-              </div>
+                );
+              })}
             </div>
           )}
         </div>
+
+        {/* Recent history */}
+        {recentHistory.length > 0 && (
+          <div className="mt-4">
+            <div className="mb-1.5 text-[9px] font-semibold uppercase tracking-wider text-foreground/25">
+              Recent
+            </div>
+            <div className="space-y-px">
+              {recentHistory.map((entry) => {
+                let hostname = entry.url;
+                try { hostname = new URL(entry.url).hostname.replace(/^www\./, ""); } catch { /* keep */ }
+                return (
+                  <button
+                    key={`recent-${entry.url}`}
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-start transition-colors hover:bg-foreground/[0.04]"
+                    onClick={() => onOpen(entry.url)}
+                  >
+                    <Globe className="h-3 w-3 shrink-0 text-foreground/15" />
+                    <span className="min-w-0 truncate text-[11px] text-foreground/60">{entry.title}</span>
+                    <span className="ms-auto shrink-0 text-[10px] text-foreground/20">{hostname}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </form>
+      </div>
     </div>
   );
 }
@@ -552,6 +522,7 @@ function WebviewInstance({
   const [canGoForward, setCanGoForward] = useState(false);
   const [isSecure, setIsSecure] = useState(false);
   const [isDomReady, setIsDomReady] = useState(false);
+  const [isDevToolsOpen, setIsDevToolsOpen] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
   const withWebview = useCallback(
@@ -567,6 +538,18 @@ function WebviewInstance({
     },
     [isDomReady],
   );
+
+  const applyColorScheme = useCallback(async () => {
+    if (!isDomReady) return;
+
+    const wv = webviewRef.current;
+    if (!wv) return;
+
+    const result = await window.claude.setBrowserColorScheme(wv.getWebContentsId(), tab.colorScheme);
+    if (!result.ok) {
+      throw new Error(result.error ?? "Failed to apply browser color scheme");
+    }
+  }, [isDomReady, tab.colorScheme]);
 
   // Sync URL input when tab url changes externally
   useEffect(() => {
@@ -618,6 +601,13 @@ function WebviewInstance({
     };
     const onDomReady = () => {
       setIsDomReady(true);
+      setIsDevToolsOpen(wv.isDevToolsOpened());
+    };
+    const onDevToolsOpened = () => {
+      setIsDevToolsOpen(true);
+    };
+    const onDevToolsClosed = () => {
+      setIsDevToolsOpen(false);
     };
 
     // Listen for element grab messages from the injected inspector script
@@ -653,6 +643,8 @@ function WebviewInstance({
     wv.addEventListener("page-title-updated", onPageTitleUpdated);
     wv.addEventListener("console-message", onConsoleMessage);
     wv.addEventListener("dom-ready", onDomReady);
+    wv.addEventListener("devtools-opened", onDevToolsOpened);
+    wv.addEventListener("devtools-closed", onDevToolsClosed);
 
     return () => {
       wv.removeEventListener("did-navigate", onDidNavigate);
@@ -662,6 +654,8 @@ function WebviewInstance({
       wv.removeEventListener("page-title-updated", onPageTitleUpdated);
       wv.removeEventListener("console-message", onConsoleMessage);
       wv.removeEventListener("dom-ready", onDomReady);
+      wv.removeEventListener("devtools-opened", onDevToolsOpened);
+      wv.removeEventListener("devtools-closed", onDevToolsClosed);
     };
   }, [onUpdateTab, onVisitUrl]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -682,6 +676,12 @@ function WebviewInstance({
     }
   }, [inspectMode, withWebview]);
 
+  useEffect(() => {
+    applyColorScheme().catch((err) => {
+      reportError("BROWSER_COLOR_SCHEME", err, { colorScheme: tab.colorScheme });
+    });
+  }, [applyColorScheme, tab.colorScheme]);
+
   const handleGoBack = useCallback(() => {
     withWebview((wv) => wv.goBack());
   }, [withWebview]);
@@ -699,6 +699,23 @@ function WebviewInstance({
       }
     });
   }, [tab.isLoading, withWebview]);
+
+  const handleToggleColorScheme = useCallback(() => {
+    onUpdateTab({ colorScheme: tab.colorScheme === "dark" ? "light" : "dark" });
+  }, [onUpdateTab, tab.colorScheme]);
+
+  const handleToggleDevTools = useCallback(() => {
+    withWebview((wv) => {
+      if (wv.isDevToolsOpened()) {
+        wv.closeDevTools();
+        setIsDevToolsOpen(false);
+        return;
+      }
+
+      wv.openDevTools({ mode: "detach", activate: true });
+      setIsDevToolsOpen(true);
+    });
+  }, [withWebview]);
 
   const canNavigateControls = isDomReady;
   const filteredHistory = useMemo(() => {
@@ -724,14 +741,28 @@ function WebviewInstance({
       const url = resolveNavigationInput(input);
       if (!url) return;
 
+      const currentUrl = webviewRef.current?.getURL() || tab.url;
+      if (currentUrl && url === currentUrl) {
+        setUrlInput(url);
+        onUpdateTab({ isLoading: true });
+        withWebview((wv) => wv.reload(), { requireDomReady: false });
+        return;
+      }
+
       setUrlInput(url);
       onNavigate(url);
     },
-    [onNavigate],
+    [onNavigate, onUpdateTab, tab.url, withWebview],
   );
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
+    setShowSuggestions(false);
+    const form = e.currentTarget;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && form.contains(active)) {
+      active.blur();
+    }
     navigateTo(urlInput);
   };
 
@@ -752,57 +783,89 @@ function WebviewInstance({
     <div className="flex h-full flex-col">
       {/* Navigation bar */}
       <div className="flex items-center gap-1.5 px-2 py-1.5">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6 shrink-0 text-foreground/30 hover:text-foreground/60 disabled:opacity-20"
-          onClick={handleGoBack}
-          disabled={!canNavigateControls || !canGoBack}
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6 shrink-0 text-foreground/30 hover:text-foreground/60 disabled:opacity-20"
-          onClick={handleGoForward}
-          disabled={!canNavigateControls || !canGoForward}
-        >
-          <ArrowRight className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6 shrink-0 text-foreground/30 hover:text-foreground/60"
-          onClick={handleReloadOrStop}
+        {/* Nav button group */}
+        <div className="flex shrink-0 items-center rounded-md border border-foreground/[0.08] bg-foreground/[0.02]">
+          <button
+            type="button"
+            className="flex h-6 w-6 items-center justify-center text-foreground/35 hover:text-foreground/65 hover:bg-foreground/[0.06] rounded-s-md transition-colors cursor-pointer disabled:opacity-20 disabled:cursor-not-allowed"
+            onClick={handleGoBack}
+            disabled={!canNavigateControls || !canGoBack}
+            title="Back"
+          >
+            <ArrowLeft className="h-3 w-3" />
+          </button>
+          <div className="h-3.5 w-px bg-foreground/[0.08]" />
+          <button
+            type="button"
+            className="flex h-6 w-6 items-center justify-center text-foreground/35 hover:text-foreground/65 hover:bg-foreground/[0.06] transition-colors cursor-pointer disabled:opacity-20 disabled:cursor-not-allowed"
+            onClick={handleGoForward}
+            disabled={!canNavigateControls || !canGoForward}
+            title="Forward"
+          >
+            <ArrowRight className="h-3 w-3" />
+          </button>
+          <div className="h-3.5 w-px bg-foreground/[0.08]" />
+          <button
+            type="button"
+            className="flex h-6 w-6 items-center justify-center text-foreground/35 hover:text-foreground/65 hover:bg-foreground/[0.06] rounded-e-md transition-colors cursor-pointer disabled:opacity-20 disabled:cursor-not-allowed"
+            onClick={handleReloadOrStop}
+            disabled={!canNavigateControls}
+            title={tab.isLoading ? "Stop" : "Reload"}
+          >
+            {tab.isLoading ? (
+              <XIcon className="h-3 w-3" />
+            ) : (
+              <RotateCw className="h-3 w-3" />
+            )}
+          </button>
+        </div>
+
+        {/* Inspect button */}
+        <button
+          type="button"
+          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition-colors cursor-pointer disabled:opacity-20 disabled:cursor-not-allowed ${
+            inspectMode
+              ? "border-blue-400/30 bg-blue-500/10 text-blue-400 hover:text-blue-300"
+              : "border-foreground/[0.08] bg-foreground/[0.02] text-foreground/35 hover:text-foreground/65 hover:bg-foreground/[0.06]"
+          }`}
+          onClick={onToggleInspect}
           disabled={!canNavigateControls}
+          title={inspectMode ? "Cancel inspect" : "Grab element"}
         >
-          {tab.isLoading ? (
-            <XIcon className="h-3.5 w-3.5" />
+          <Crosshair className="h-3 w-3" />
+        </button>
+
+        <button
+          type="button"
+          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-foreground/[0.08] bg-foreground/[0.02] transition-colors cursor-pointer disabled:opacity-20 disabled:cursor-not-allowed ${
+            isDevToolsOpen
+              ? "text-emerald-400 hover:text-emerald-300 bg-emerald-500/10"
+              : "text-foreground/35 hover:text-foreground/65 hover:bg-foreground/[0.06]"
+          }`}
+          onClick={handleToggleDevTools}
+          disabled={!canNavigateControls}
+          title={isDevToolsOpen ? "Close inspector" : "Open inspector"}
+        >
+          <Bug className="h-3 w-3" />
+        </button>
+
+        <button
+          type="button"
+          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-foreground/[0.08] transition-colors cursor-pointer disabled:opacity-20 disabled:cursor-not-allowed ${
+            tab.colorScheme === "dark"
+              ? "bg-slate-900 text-sky-100 hover:bg-slate-800"
+              : "bg-amber-50 text-amber-700 hover:bg-amber-100"
+          }`}
+          onClick={handleToggleColorScheme}
+          disabled={!canNavigateControls}
+          title={`Simulating ${tab.colorScheme} mode`}
+        >
+          {tab.colorScheme === "dark" ? (
+            <Moon className="h-3 w-3" />
           ) : (
-            <RotateCw className="h-3 w-3" />
+            <Sun className="h-3 w-3" />
           )}
-        </Button>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className={`h-6 w-6 shrink-0 ${
-                inspectMode
-                  ? "text-blue-400 bg-blue-500/10 hover:text-blue-300"
-                  : "text-foreground/30 hover:text-foreground/60"
-              }`}
-              onClick={onToggleInspect}
-              disabled={!canNavigateControls}
-            >
-              <Crosshair className="h-3 w-3" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {inspectMode ? "Cancel inspect" : "Grab element"}
-          </TooltipContent>
-        </Tooltip>
+        </button>
 
         {/* URL bar */}
         <form onSubmit={handleSubmit} className="relative min-w-0 flex-1">

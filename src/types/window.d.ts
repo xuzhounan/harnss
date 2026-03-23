@@ -6,6 +6,7 @@ import type {
   InstalledAgent, ModelInfo, McpServerConfig, McpServerStatus,
   AppSettings,
   ClaudeEffort,
+  MacBackgroundEffect,
   ThemeOption,
 } from "./ui";
 import type { ACPSessionEvent, ACPPermissionEvent, ACPTurnCompleteEvent, ACPConfigOption } from "./acp";
@@ -56,7 +57,10 @@ declare global {
   interface Window {
     claude: {
       getGlassSupported: () => Promise<boolean>;
+      getMacBackgroundEffectSupport: () => Promise<{ liquidGlass: boolean; vibrancy: boolean }>;
       setThemeSource: (themeSource: ThemeOption) => void;
+      setMacBackgroundEffect: (effect: MacBackgroundEffect) => void;
+      relaunchApp: () => Promise<{ ok?: boolean; error?: string }>;
       setMinWidth: (width: number) => void;
       glass: {
         setTintColor: (tintColor: string | null) => void;
@@ -100,6 +104,10 @@ declare global {
       newFile: (filePath: string) => Promise<{ ok?: boolean; error?: string }>;
       newFolder: (folderPath: string) => Promise<{ ok?: boolean; error?: string }>;
       writeClipboardText: (text: string) => Promise<{ ok?: boolean; error?: string }>;
+      setBrowserColorScheme: (
+        targetWebContentsId: number,
+        colorScheme: "light" | "dark",
+      ) => Promise<{ ok?: boolean; error?: string }>;
       openInEditor: (filePath: string, line?: number, editor?: string) => Promise<{ ok?: boolean; editor?: string; error?: string }>;
       openExternal: (url: string) => Promise<{ ok?: boolean; error?: string }>;
       showItemInFolder: (filePath: string) => Promise<{ ok?: boolean; error?: string }>;

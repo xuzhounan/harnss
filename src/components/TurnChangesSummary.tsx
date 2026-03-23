@@ -4,6 +4,7 @@ import { DiffViewer } from "./DiffViewer";
 import { OpenInEditorButton } from "./OpenInEditorButton";
 import type { TurnSummary, FileChange } from "@/lib/turn-changes";
 import { useChatPersistedState } from "@/components/chat-ui-state";
+import { CHAT_ROW_CLASS, CHAT_ROW_WIDTH_CLASS } from "@/components/lib/chat-layout";
 
 // ── Color/icon mapping (matches FilesPanel conventions) ──
 
@@ -29,7 +30,7 @@ const InlineFileChange = memo(function InlineFileChange({
   const dir = dirParts.length > 1 ? dirParts.slice(0, -1).join("/") + "/" : "";
 
   return (
-    <div className="rounded-md border border-border/30 overflow-hidden">
+    <div className="rounded-md border border-foreground/[0.06] overflow-hidden">
       {/* File row — clickable to expand/collapse */}
       <button
         type="button"
@@ -59,7 +60,7 @@ const InlineFileChange = memo(function InlineFileChange({
 
       {/* Expanded: show diff or content */}
       {isExpanded && (
-        <div className="border-t border-border/20">
+        <div className="border-t border-foreground/[0.06]">
           {change.toolName === "Edit" ? (
             <DiffViewer
               oldString={change.oldString ?? ""}
@@ -142,47 +143,49 @@ export const TurnChangesSummary = memo(function TurnChangesSummary({
   }, []);
 
   return (
-    <div className="flow-root mx-4 my-2 animate-in fade-in slide-in-from-bottom-1 duration-300">
-      {/* Collapsed header bar */}
-      <button
-        type="button"
-        onClick={() => setIsOpen((prev) => !prev)}
-        className="flex w-full items-center gap-2 rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-start text-sm text-muted-foreground transition-colors hover:bg-muted/50 cursor-pointer"
-      >
-        <FileDiff className="h-4 w-4 shrink-0 text-muted-foreground/70" />
+    <div className={`flow-root ${CHAT_ROW_CLASS} animate-in fade-in slide-in-from-bottom-1 duration-300`}>
+      <div className={`${CHAT_ROW_WIDTH_CLASS} w-full`}>
+        {/* Collapsed header bar */}
+        <button
+          type="button"
+          onClick={() => setIsOpen((prev) => !prev)}
+          className="flex w-full items-center gap-2 rounded-lg border border-foreground/[0.06] bg-muted/30 px-3 py-2 text-start text-sm text-muted-foreground transition-colors hover:bg-muted/50 cursor-pointer"
+        >
+          <FileDiff className="h-4 w-4 shrink-0 text-muted-foreground/70" />
 
-        <span className="flex-1 min-w-0 truncate">
-          <span className="font-medium text-foreground/80">
-            {summary.fileCount} file{summary.fileCount !== 1 ? "s" : ""} changed
+          <span className="flex-1 min-w-0 truncate">
+            <span className="font-medium text-foreground/80">
+              {summary.fileCount} file{summary.fileCount !== 1 ? "s" : ""} changed
+            </span>
+            <span className="ms-1.5 text-xs text-muted-foreground/60">
+              {compactFileList}
+            </span>
           </span>
-          <span className="ms-1.5 text-xs text-muted-foreground/60">
-            {compactFileList}
+
+          {/* Stats pill */}
+          <span className="shrink-0 text-xs text-muted-foreground/50">
+            {statsText}
           </span>
-        </span>
 
-        {/* Stats pill */}
-        <span className="shrink-0 text-xs text-muted-foreground/50">
-          {statsText}
-        </span>
+          <ChevronRight
+            className={`h-4 w-4 shrink-0 transition-transform duration-200 ${isOpen ? "rotate-90" : ""}`}
+          />
+        </button>
 
-        <ChevronRight
-          className={`h-4 w-4 shrink-0 transition-transform duration-200 ${isOpen ? "rotate-90" : ""}`}
-        />
-      </button>
-
-      {/* Expanded: file list with inline diffs */}
-      {isOpen && (
-        <div className="mt-1 rounded-lg border border-border/30 bg-muted/20 p-2 animate-in fade-in slide-in-from-top-1 duration-200 flex flex-col gap-1.5">
-          {uniqueFiles.map((change) => (
-            <InlineFileChange
-              key={`${change.filePath}::${change.messageId}`}
-              change={change}
-              isExpanded={expandedFiles.has(change.filePath)}
-              onToggle={() => toggleFile(change.filePath)}
-            />
-          ))}
-        </div>
-      )}
+        {/* Expanded: file list with inline diffs */}
+        {isOpen && (
+          <div className="mt-1 rounded-lg border border-foreground/[0.06] bg-muted/20 p-2 animate-in fade-in slide-in-from-top-1 duration-200 flex flex-col gap-1.5">
+            {uniqueFiles.map((change) => (
+              <InlineFileChange
+                key={`${change.filePath}::${change.messageId}`}
+                change={change}
+                isExpanded={expandedFiles.has(change.filePath)}
+                onToggle={() => toggleFile(change.filePath)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 });

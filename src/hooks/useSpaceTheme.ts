@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Space } from "@/types";
+import type { MacBackgroundEffect, Space } from "@/types";
 import { computeGlassTintColor } from "@/lib/color-utils";
 import { isMac } from "@/lib/utils";
 
@@ -11,6 +11,9 @@ const TINT_VARS = [
   "--island-overlay-bg", "--island-fill",
 ];
 
+const DARK_SURFACE_BRIGHTNESS_MULTIPLIER = 1.3;
+const LIGHT_SURFACE_WHITE_MIX = 0.3;
+
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
@@ -18,6 +21,14 @@ function clamp01(value: number): number {
 function getTintStrength(chroma: number): number {
   const normalized = clamp01(chroma / 0.3);
   return Math.pow(normalized, 0.8);
+}
+
+function brightenDarkLightness(value: number): number {
+  return clamp01(value * DARK_SURFACE_BRIGHTNESS_MULTIPLIER);
+}
+
+function brightenLightLightness(value: number): number {
+  return clamp01(value + (1 - value) * LIGHT_SURFACE_WHITE_MIX);
 }
 
 /**
@@ -34,6 +45,7 @@ export function useSpaceTheme(
   activeSpace: Space | undefined,
   resolvedTheme: string,
   isGlassActive: boolean,
+  macBackgroundEffect: MacBackgroundEffect,
 ): React.CSSProperties | null {
   const [glassOverlayStyle, setGlassOverlayStyle] = useState<React.CSSProperties | null>(null);
 
@@ -43,7 +55,7 @@ export function useSpaceTheme(
     const isGlass = isGlassActive;
     const isDark = resolvedTheme === "dark";
     // Native macOS glass supports tintColor via addView()
-    const isNativeGlass = isGlass && isMac;
+    const isNativeGlass = isGlass && isMac && macBackgroundEffect === "liquid-glass";
 
     if (!space || space.color.chroma === 0) {
       // Clear all tinted vars so the CSS base values take over
@@ -55,7 +67,8 @@ export function useSpaceTheme(
       // Still apply opacity even for colorless (default) space
       const opacity = space?.color.opacity;
       if (opacity !== undefined && opacity < 1) {
-        const bg = isDark ? `oklch(0.107 0 0 / ${opacity})` : `oklch(1 0 0 / ${opacity})`;
+        const darkBase = brightenDarkLightness(0.107);
+        const bg = isDark ? `oklch(${darkBase} 0 0 / ${opacity})` : `oklch(1 0 0 / ${opacity})`;
         root.style.setProperty("--island-fill", bg);
       } else {
         root.style.removeProperty("--island-fill");
@@ -70,10 +83,19 @@ export function useSpaceTheme(
     const surfaceChroma = (isDark ? 0.04 : 0.055) * tintStrength;
     const borderChroma = (isDark ? 0.026 : 0.034) * tintStrength;
     const sidebarChroma = (isDark ? 0.024 : 0.03) * tintStrength;
-    const lightBgLightness = 0.985 - 0.012 * tintStrength;
-    const lightSurfaceLightness = 0.955 - 0.02 * tintStrength;
-    const darkBgLightness = 0.12 - 0.013 * tintStrength;
-    const darkSurfaceLightness = 0.355 - 0.04 * tintStrength;
+    const lightBgLightness = brightenLightLightness(0.985 - 0.012 * tintStrength);
+    const lightSurfaceLightness = brightenLightLightness(0.955 - 0.02 * tintStrength);
+    const lightBorderLightness = brightenLightLightness(0.91);
+    const lightCardLightness = brightenLightLightness(0.98);
+    const lightSidebarLightness = brightenLightLightness(0.968);
+    const lightSidebarAccentLightness = brightenLightLightness(0.947);
+    const darkBgLightness = brightenDarkLightness(0.12 - 0.013 * tintStrength);
+    const darkSurfaceLightness = brightenDarkLightness(0.355 - 0.04 * tintStrength);
+    const darkBorderLightness = brightenDarkLightness(0.39);
+    const darkCardLightness = brightenDarkLightness(0.25);
+    const darkSidebarLightness = brightenDarkLightness(0.2);
+    const darkSidebarAccentLightness = brightenDarkLightness(0.31);
+    const darkSidebarBorderLightness = brightenDarkLightness(0.4);
 
     root.style.setProperty("--space-hue", String(hue));
     root.style.setProperty("--space-chroma", String(chroma));
@@ -81,11 +103,11 @@ export function useSpaceTheme(
     if (isDark) {
       root.style.setProperty("--background", `oklch(${darkBgLightness} ${bgChroma} ${hue})`);
       root.style.setProperty("--accent", `oklch(${darkSurfaceLightness} ${surfaceChroma} ${hue})`);
-      root.style.setProperty("--border", `oklch(0.39 ${borderChroma} ${hue})`);
+      root.style.setProperty("--border", `oklch(${darkBorderLightness} ${borderChroma} ${hue})`);
       root.style.setProperty("--muted", `oklch(${darkSurfaceLightness} ${surfaceChroma} ${hue})`);
       root.style.setProperty("--secondary", `oklch(${darkSurfaceLightness} ${surfaceChroma} ${hue})`);
-      root.style.setProperty("--card", `oklch(0.25 ${bgChroma} ${hue})`);
-      root.style.setProperty("--input", `oklch(0.39 ${borderChroma} ${hue})`);
+      root.style.setProperty("--card", `oklch(${darkCardLightness} ${bgChroma} ${hue})`);
+      root.style.setProperty("--input", `oklch(${darkBorderLightness} ${borderChroma} ${hue})`);
       // Island fill with alpha for per-space opacity (--background stays opaque for gradient fades)
       if (opacity < 1) {
         root.style.setProperty("--island-fill", `oklch(${darkBgLightness} ${bgChroma} ${hue} / ${opacity})`);
@@ -93,18 +115,18 @@ export function useSpaceTheme(
         root.style.removeProperty("--island-fill");
       }
       if (!isGlass) {
-        root.style.setProperty("--sidebar", `oklch(0.2 ${sidebarChroma} ${hue})`);
-        root.style.setProperty("--sidebar-accent", `oklch(0.31 ${surfaceChroma} ${hue})`);
-        root.style.setProperty("--sidebar-border", `oklch(0.4 ${borderChroma} ${hue})`);
+        root.style.setProperty("--sidebar", `oklch(${darkSidebarLightness} ${sidebarChroma} ${hue})`);
+        root.style.setProperty("--sidebar-accent", `oklch(${darkSidebarAccentLightness} ${surfaceChroma} ${hue})`);
+        root.style.setProperty("--sidebar-border", `oklch(${darkSidebarBorderLightness} ${borderChroma} ${hue})`);
       }
     } else {
       root.style.setProperty("--background", `oklch(${lightBgLightness} ${bgChroma} ${hue})`);
       root.style.setProperty("--accent", `oklch(${lightSurfaceLightness} ${surfaceChroma} ${hue})`);
-      root.style.setProperty("--border", `oklch(0.91 ${borderChroma} ${hue})`);
+      root.style.setProperty("--border", `oklch(${lightBorderLightness} ${borderChroma} ${hue})`);
       root.style.setProperty("--muted", `oklch(${lightSurfaceLightness} ${surfaceChroma} ${hue})`);
       root.style.setProperty("--secondary", `oklch(${lightSurfaceLightness} ${surfaceChroma} ${hue})`);
-      root.style.setProperty("--card", `oklch(0.98 ${bgChroma} ${hue})`);
-      root.style.setProperty("--input", `oklch(0.91 ${borderChroma} ${hue})`);
+      root.style.setProperty("--card", `oklch(${lightCardLightness} ${bgChroma} ${hue})`);
+      root.style.setProperty("--input", `oklch(${lightBorderLightness} ${borderChroma} ${hue})`);
       // Island fill with alpha for per-space opacity
       if (opacity < 1) {
         root.style.setProperty("--island-fill", `oklch(${lightBgLightness} ${bgChroma} ${hue} / ${opacity})`);
@@ -112,13 +134,13 @@ export function useSpaceTheme(
         root.style.removeProperty("--island-fill");
       }
       if (!isGlass) {
-        root.style.setProperty("--sidebar", `oklch(0.968 ${sidebarChroma} ${hue})`);
-        root.style.setProperty("--sidebar-accent", `oklch(0.947 ${surfaceChroma} ${hue})`);
-        root.style.setProperty("--sidebar-border", `oklch(0.91 ${borderChroma} ${hue})`);
+        root.style.setProperty("--sidebar", `oklch(${lightSidebarLightness} ${sidebarChroma} ${hue})`);
+        root.style.setProperty("--sidebar-accent", `oklch(${lightSidebarAccentLightness} ${surfaceChroma} ${hue})`);
+        root.style.setProperty("--sidebar-border", `oklch(${lightBorderLightness} ${borderChroma} ${hue})`);
       } else {
         // Glass + light: show more native glass while keeping a subtle space tint.
         root.style.setProperty("--sidebar", `oklch(1 ${sidebarChroma} ${hue} / ${0.22 + 0.12 * tintStrength})`);
-        root.style.setProperty("--sidebar-accent", `oklch(0.965 ${surfaceChroma} ${hue} / ${0.22 + 0.14 * tintStrength})`);
+        root.style.setProperty("--sidebar-accent", `oklch(${brightenLightLightness(0.965)} ${surfaceChroma} ${hue} / ${0.22 + 0.14 * tintStrength})`);
         root.style.setProperty("--sidebar-border", `oklch(0 ${borderChroma} ${hue} / ${0.08 + 0.08 * tintStrength})`);
       }
     }
@@ -161,7 +183,7 @@ export function useSpaceTheme(
       setGlassOverlayStyle(null);
       if (isNativeGlass) window.claude.glass?.setTintColor(null);
     };
-  }, [activeSpace, resolvedTheme, isGlassActive]);
+  }, [activeSpace, resolvedTheme, isGlassActive, macBackgroundEffect]);
 
   return glassOverlayStyle;
 }

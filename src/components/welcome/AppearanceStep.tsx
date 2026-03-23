@@ -144,6 +144,8 @@ export function AppearanceStep({
   onAutoGroupToolsChange,
   autoExpandTools,
   onAutoExpandToolsChange,
+  expandEditToolCallsByDefault,
+  onExpandEditToolCallsByDefaultChange,
   transparency,
   onTransparencyChange,
   glassSupported,
@@ -291,6 +293,23 @@ export function AppearanceStep({
             <Switch
               checked={autoExpandTools}
               onCheckedChange={onAutoExpandToolsChange}
+            />
+          </div>
+          <div className="flex items-center justify-between rounded-xl bg-foreground/[0.03] px-5 py-4">
+            <div className="flex items-center gap-3">
+              <ChevronsUpDown className="h-4.5 w-4.5 text-muted-foreground" />
+              <div>
+                <div className="text-sm font-medium text-foreground">
+                  Expand Edit and Write tools by default
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Start file edit tool calls open instead of collapsed.
+                </div>
+              </div>
+            </div>
+            <Switch
+              checked={expandEditToolCallsByDefault}
+              onCheckedChange={onExpandEditToolCallsByDefaultChange}
             />
           </div>
         </motion.div>

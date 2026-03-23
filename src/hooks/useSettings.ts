@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ToolId } from "@/components/ToolPicker";
-import type { AcpPermissionBehavior, ClaudeEffort, EngineId, ThemeOption } from "@/types";
+import type { AcpPermissionBehavior, ClaudeEffort, EngineId, MacBackgroundEffect, ThemeOption } from "@/types";
 
 // ── Helpers ──
 
@@ -28,6 +28,18 @@ function readBool(key: string, fallback: boolean): boolean {
   const raw = localStorage.getItem(key);
   if (raw === null) return fallback;
   return raw === "true";
+}
+
+const IS_MAC_PLATFORM = typeof navigator !== "undefined"
+  && /mac/i.test(navigator.platform);
+
+function readMacBackgroundEffect(): MacBackgroundEffect {
+  const stored = localStorage.getItem("harnss-mac-background-effect");
+  if (stored === "liquid-glass" || stored === "vibrancy" || stored === "off") {
+    return stored;
+  }
+
+  return readBool("harnss-transparency", true) ? "liquid-glass" : "off";
 }
 
 /** Normalize an array of ratios to sum to 1.0, respecting a per-element minimum. */
@@ -94,6 +106,8 @@ export interface Settings {
   setIslandLayout: (enabled: boolean) => void;
   islandShine: boolean;
   setIslandShine: (enabled: boolean) => void;
+  macBackgroundEffect: MacBackgroundEffect;
+  setMacBackgroundEffect: (effect: MacBackgroundEffect) => void;
   transparency: boolean;
   setTransparency: (enabled: boolean) => void;
   planMode: boolean;
@@ -112,10 +126,16 @@ export interface Settings {
   setAvoidGroupingEdits: (on: boolean) => void;
   autoExpandTools: boolean;
   setAutoExpandTools: (on: boolean) => void;
+  expandEditToolCallsByDefault: boolean;
+  setExpandEditToolCallsByDefault: (on: boolean) => void;
   transparentToolPicker: boolean;
   setTransparentToolPicker: (on: boolean) => void;
   coloredSidebarIcons: boolean;
   setColoredSidebarIcons: (on: boolean) => void;
+  showToolIcons: boolean;
+  setShowToolIcons: (on: boolean) => void;
+  coloredToolIcons: boolean;
+  setColoredToolIcons: (on: boolean) => void;
 
   // Per-project
   model: string;
@@ -311,13 +331,33 @@ export function useSettings(projectId: string | null, engine: EngineId = "claude
     localStorage.setItem("harnss-island-shine", String(enabled));
   }, []);
 
-  const [transparency, setTransparencyRaw] = useState(() =>
+  const [macBackgroundEffect, setMacBackgroundEffectRaw] = useState<MacBackgroundEffect>(() =>
+    readMacBackgroundEffect(),
+  );
+  const [transparencyRaw, setTransparencyRaw] = useState(() =>
     readBool("harnss-transparency", true),
   );
-  const setTransparency = useCallback((enabled: boolean) => {
+  const setMacBackgroundEffect = useCallback((effect: MacBackgroundEffect) => {
+    setMacBackgroundEffectRaw(effect);
+    localStorage.setItem("harnss-mac-background-effect", effect);
+    const enabled = effect !== "off";
     setTransparencyRaw(enabled);
     localStorage.setItem("harnss-transparency", String(enabled));
   }, []);
+  const transparency = IS_MAC_PLATFORM
+    ? macBackgroundEffect !== "off"
+    : transparencyRaw;
+  const setTransparency = useCallback((enabled: boolean) => {
+    setTransparencyRaw(enabled);
+    localStorage.setItem("harnss-transparency", String(enabled));
+    if (IS_MAC_PLATFORM) {
+      const nextEffect = enabled
+        ? (macBackgroundEffect === "off" ? "liquid-glass" : macBackgroundEffect)
+        : "off";
+      setMacBackgroundEffectRaw(nextEffect);
+      localStorage.setItem("harnss-mac-background-effect", nextEffect);
+    }
+  }, [macBackgroundEffect]);
 
   const [planMode, setPlanModeRaw] = useState(() => {
     const stored = localStorage.getItem("harnss-plan-mode");
@@ -405,6 +445,14 @@ export function useSettings(projectId: string | null, engine: EngineId = "claude
     localStorage.setItem("harnss-auto-expand-tools", String(on));
   }, []);
 
+  const [expandEditToolCallsByDefault, setExpandEditToolCallsByDefaultRaw] = useState(() =>
+    readBool("harnss-expand-edit-tool-calls-by-default", true),
+  );
+  const setExpandEditToolCallsByDefault = useCallback((on: boolean) => {
+    setExpandEditToolCallsByDefaultRaw(on);
+    localStorage.setItem("harnss-expand-edit-tool-calls-by-default", String(on));
+  }, []);
+
   const [transparentToolPicker, setTransparentToolPickerRaw] = useState(() =>
     readBool("harnss-transparent-tool-picker", false),
   );
@@ -419,6 +467,22 @@ export function useSettings(projectId: string | null, engine: EngineId = "claude
   const setColoredSidebarIcons = useCallback((on: boolean) => {
     setColoredSidebarIconsRaw(on);
     localStorage.setItem("harnss-colored-sidebar-icons", String(on));
+  }, []);
+
+  const [showToolIcons, setShowToolIconsRaw] = useState(() =>
+    readBool("harnss-show-tool-icons", true),
+  );
+  const setShowToolIcons = useCallback((on: boolean) => {
+    setShowToolIconsRaw(on);
+    localStorage.setItem("harnss-show-tool-icons", String(on));
+  }, []);
+
+  const [coloredToolIcons, setColoredToolIconsRaw] = useState(() =>
+    readBool("harnss-colored-tool-icons", false),
+  );
+  const setColoredToolIcons = useCallback((on: boolean) => {
+    setColoredToolIconsRaw(on);
+    localStorage.setItem("harnss-colored-tool-icons", String(on));
   }, []);
 
   // ── Per-project settings ──
@@ -721,6 +785,8 @@ export function useSettings(projectId: string | null, engine: EngineId = "claude
     setIslandLayout,
     islandShine,
     setIslandShine,
+    macBackgroundEffect,
+    setMacBackgroundEffect,
     transparency,
     setTransparency,
     planMode,
@@ -739,10 +805,16 @@ export function useSettings(projectId: string | null, engine: EngineId = "claude
     setAvoidGroupingEdits,
     autoExpandTools,
     setAutoExpandTools,
+    expandEditToolCallsByDefault,
+    setExpandEditToolCallsByDefault,
     transparentToolPicker,
     setTransparentToolPicker,
     coloredSidebarIcons,
     setColoredSidebarIcons,
+    showToolIcons,
+    setShowToolIcons,
+    coloredToolIcons,
+    setColoredToolIcons,
     model,
     setModel,
     getModelForEngine,

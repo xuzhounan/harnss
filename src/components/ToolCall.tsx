@@ -1,20 +1,24 @@
-import { useEffect, useRef, memo } from "react";
-import {
-  ChevronRight,
-  AlertCircle,
-} from "lucide-react";
+import { useEffect, useRef, useMemo, memo } from "react";
+import { ChevronRight, AlertCircle } from "lucide-react";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import type { UIMessage } from "@/types";
-import { getToolIcon, getToolLabel } from "@/components/lib/tool-metadata";
+import { getToolIcon, getToolLabel, getToolColor } from "@/components/lib/tool-metadata";
 import { formatCompactSummary } from "@/components/lib/tool-formatting";
 import { TextShimmer } from "@/components/ui/text-shimmer";
 import { TaskTool } from "./tool-renderers/TaskTool";
 import { ExpandedToolContent } from "./tool-renderers/ExpandedToolContent";
 import { useChatPersistedState } from "@/components/chat-ui-state";
+import { ToolGlyph } from "@/components/lib/ToolGlyph";
+import {
+  CHAT_COLLAPSIBLE_CONTENT_CLASS,
+  CHAT_ROW_CLASS,
+  CHAT_ROW_WIDTH_CLASS,
+} from "@/components/lib/chat-layout";
+import { getToolDiffStats } from "@/lib/diff-stats";
 
 // ── Main entry ──
 
@@ -22,6 +26,9 @@ interface ToolCallProps {
   message: UIMessage;
   compact?: boolean;
   autoExpandTools?: boolean;
+  expandEditToolCallsByDefault?: boolean;
+  showToolIcons?: boolean;
+  coloredToolIcons?: boolean;
   disableCollapseAnimation?: boolean;
 }
 
@@ -29,6 +36,9 @@ export const ToolCall = memo(function ToolCall({
   message,
   compact,
   autoExpandTools = false,
+  expandEditToolCallsByDefault = true,
+  showToolIcons = true,
+  coloredToolIcons = false,
   disableCollapseAnimation = false,
 }: ToolCallProps) {
   const normalizedToolName = (message.toolName ?? "").toLowerCase();
@@ -40,6 +50,9 @@ export const ToolCall = memo(function ToolCall({
       <RegularTool
         message={message}
         autoExpandTools={autoExpandTools}
+        expandEditToolCallsByDefault={expandEditToolCallsByDefault}
+        showToolIcons={showToolIcons}
+        coloredToolIcons={coloredToolIcons}
         disableCollapseAnimation={disableCollapseAnimation}
       />
     );
@@ -48,8 +61,8 @@ export const ToolCall = memo(function ToolCall({
   if (compact) return content;
 
   return (
-    <div className="flex justify-start px-4 py-0.5">
-      <div className={`min-w-0 max-w-[85%] ${isWideTool ? "w-full" : ""}`}>
+    <div className={`flex justify-start ${CHAT_ROW_CLASS}`}>
+      <div className={`${CHAT_ROW_WIDTH_CLASS} ${isWideTool ? "w-full" : ""}`}>
         {content}
       </div>
     </div>
@@ -57,6 +70,9 @@ export const ToolCall = memo(function ToolCall({
 }, (prev, next) =>
   prev.compact === next.compact &&
   prev.autoExpandTools === next.autoExpandTools &&
+  prev.expandEditToolCallsByDefault === next.expandEditToolCallsByDefault &&
+  prev.showToolIcons === next.showToolIcons &&
+  prev.coloredToolIcons === next.coloredToolIcons &&
   prev.disableCollapseAnimation === next.disableCollapseAnimation &&
   prev.message.toolInput === next.message.toolInput &&
   prev.message.toolResult === next.message.toolResult &&
@@ -70,24 +86,37 @@ export const ToolCall = memo(function ToolCall({
 function RegularTool({
   message,
   autoExpandTools,
+  expandEditToolCallsByDefault,
+  showToolIcons,
+  coloredToolIcons,
   disableCollapseAnimation,
 }: {
   message: UIMessage;
   autoExpandTools: boolean;
+  expandEditToolCallsByDefault: boolean;
+  showToolIcons: boolean;
+  coloredToolIcons: boolean;
   disableCollapseAnimation: boolean;
 }) {
   const isInteractive = message.toolName === "ExitPlanMode" || message.toolName === "AskUserQuestion";
-  const isEditLike = message.toolName === "Edit" || message.toolName === "Write" || isInteractive;
+  const isEditToolCall = message.toolName === "Edit" || message.toolName === "Write";
+  const defaultExpanded = isEditToolCall && expandEditToolCallsByDefault;
+  const skipAutoExpandOnResult = isEditToolCall || isInteractive;
   const isWideTool = message.toolName === "Edit" || message.toolName === "Write" || message.toolName === "NotebookEdit";
   const [expanded, setExpanded, hasStoredExpanded] = useChatPersistedState(
     `tool:${message.id}`,
-    isEditLike,
+    defaultExpanded,
   );
   const hasResult = !!message.toolResult;
   const isRunning = !hasResult;
   const isError = !!message.toolError;
   const Icon = getToolIcon(message.toolName ?? "");
   const summary = formatCompactSummary(message);
+  const isEditOrWrite = message.toolName === "Edit" || message.toolName === "Write" || message.toolName === "NotebookEdit";
+  const diffStats = useMemo(
+    () => (isEditOrWrite && hasResult ? getToolDiffStats(message) : null),
+    [isEditOrWrite, hasResult, message],
+  );
 
   // Track whether toolResult was present at mount (persisted session → skip auto-expand)
   const initialHadResult = useRef(hasResult);
@@ -98,13 +127,13 @@ function RegularTool({
   // Auto-expand on result arrival, then auto-collapse after 2s
   useEffect(() => {
     if (!autoExpandTools) return () => clearTimeout(autoCollapseTimer.current);
-    if (!hasResult || initialHadResult.current || isEditLike || hasStoredExpanded || userToggled.current) return;
+    if (!hasResult || initialHadResult.current || skipAutoExpandOnResult || hasStoredExpanded || userToggled.current) return;
     setExpanded(true);
     autoCollapseTimer.current = setTimeout(() => {
       if (!userToggled.current) setExpanded(false);
     }, 2000);
     return () => clearTimeout(autoCollapseTimer.current);
-  }, [autoExpandTools, hasResult, hasStoredExpanded, isEditLike, setExpanded]);
+  }, [autoExpandTools, hasResult, hasStoredExpanded, setExpanded, skipAutoExpandOnResult]);
 
   const handleOpenChange = (open: boolean) => {
     userToggled.current = true;
@@ -116,27 +145,33 @@ function RegularTool({
     <button
       type="button"
       onClick={() => handleOpenChange(!expanded)}
-      className="group relative flex w-full items-center gap-2 py-1 text-[13px] hover:text-foreground transition-colors cursor-pointer overflow-hidden"
+      className="group relative flex w-full items-center gap-2 py-1 text-start text-[13px] leading-4 text-muted-foreground hover:text-foreground transition-colors cursor-pointer overflow-hidden"
       aria-expanded={expanded}
     >
-      <div className="relative flex items-center gap-2 min-w-0">
-        {isError ? (
-          <AlertCircle className="h-3.5 w-3.5 shrink-0 text-red-400/70" />
+      <div className="relative flex min-w-0 flex-1 items-center gap-[6.4px]">
+        {showToolIcons && (isError ? (
+          <ToolGlyph Icon={AlertCircle} className="text-red-400/70" />
         ) : (
-          <Icon className="h-3.5 w-3.5 shrink-0 text-foreground/35" />
-        )}
+          <ToolGlyph Icon={Icon} className={coloredToolIcons ? getToolColor(message.toolName ?? "") : "text-foreground/40"} />
+        ))}
         {isRunning ? (
           <TextShimmer as="span" className="shrink-0 whitespace-nowrap font-medium" duration={1.8} spread={1.5}>
             {getToolLabel(message.toolName ?? "", "active") ?? message.toolName ?? "Running"}
           </TextShimmer>
         ) : (
-          <span className={`shrink-0 whitespace-nowrap font-medium ${isError ? "text-red-400/70" : "text-foreground/75"}`}>
+          <span className={`shrink-0 whitespace-nowrap font-medium ${isError ? "text-red-400/70" : "text-foreground/60"}`}>
             {isError
               ? `Failed to ${getToolLabel(message.toolName ?? "", "failure")}`
               : (getToolLabel(message.toolName ?? "", "past") ?? message.toolName)}
           </span>
         )}
-        <span className="truncate text-foreground/40">{summary}</span>
+        <span className="min-w-0 truncate text-foreground/40">{summary}</span>
+        {diffStats && (
+          <span className="shrink-0 inline-flex items-center gap-1 text-[11px] tabular-nums">
+            {diffStats.added > 0 && <span className="text-emerald-400/70">+{diffStats.added}</span>}
+            {diffStats.removed > 0 && <span className="text-red-400/70">-{diffStats.removed}</span>}
+          </span>
+        )}
       </div>
 
       {hasResult && (
@@ -156,7 +191,7 @@ function RegularTool({
       <div className={isWideTool ? "block w-full min-w-0" : undefined}>
         {trigger}
         {expanded && (
-          <div className={`mt-1 mb-2 ${isWideTool ? "w-full min-w-0" : ""}`}>
+          <div className={`${CHAT_COLLAPSIBLE_CONTENT_CLASS} ${isWideTool ? "w-full min-w-0" : ""}`}>
             <ExpandedToolContent message={message} />
           </div>
         )}
@@ -171,8 +206,8 @@ function RegularTool({
       className={isWideTool ? "block w-full min-w-0" : undefined}
     >
       <CollapsibleTrigger asChild>{trigger}</CollapsibleTrigger>
-      <CollapsibleContent className={isWideTool ? "w-full min-w-0" : undefined}>
-        <div className={`mt-1 mb-2 ${isWideTool ? "w-full min-w-0" : ""}`}>
+      <CollapsibleContent className={`${CHAT_COLLAPSIBLE_CONTENT_CLASS} ${isWideTool ? "w-full min-w-0" : ""}`}>
+        <div className={isWideTool ? "w-full min-w-0" : undefined}>
           <ExpandedToolContent message={message} />
         </div>
       </CollapsibleContent>

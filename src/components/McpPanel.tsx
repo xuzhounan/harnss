@@ -480,7 +480,7 @@ export const McpPanel = memo(function McpPanel({ projectId, runtimeStatuses, isP
 
       {/* Add Server Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle className="text-sm">Add MCP Server</DialogTitle>
           </DialogHeader>

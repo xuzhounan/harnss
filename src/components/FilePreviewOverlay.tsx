@@ -5,7 +5,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { OpenInEditorButton } from "./OpenInEditorButton";
 import { useResolvedThemeClass } from "@/hooks/useResolvedThemeClass";
 import { getLanguageFromPath } from "@/lib/languages";
-import { getMonacoLanguageFromPath } from "@/lib/monaco";
+import { getMonacoLanguageFromPath, disableMonacoDiagnostics } from "@/lib/monaco";
 import { captureException } from "@/lib/analytics";
 
 const MonacoEditor = lazy(() =>
@@ -249,6 +249,7 @@ const OverlayContent = memo(function OverlayContent({
                   language={monacoLang}
                   value={content}
                   theme={resolvedTheme === "dark" ? "vs-dark" : "light"}
+                  beforeMount={disableMonacoDiagnostics}
                   options={{
                     readOnly: true,
                     minimap: { enabled: true },

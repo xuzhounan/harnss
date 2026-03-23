@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { useProjectManager } from "@/hooks/useProjectManager";
 import { useSessionManager } from "@/hooks/useSessionManager";
 import { useSidebar } from "@/hooks/useSidebar";
@@ -18,12 +19,13 @@ import { getAppMinimumWidth } from "@/lib/split-layout";
 import { resolveModelValue } from "@/lib/model-utils";
 import { getStoredProjectGitCwd, resolveProjectForSpace } from "@/lib/space-projects";
 import { getTodoItems } from "@/lib/todo-utils";
-import { isWindows } from "@/lib/utils";
+import { isMac, isWindows } from "@/lib/utils";
 import { COLUMN_TOOL_IDS, type ToolId } from "@/components/ToolPicker";
-import type { ImageAttachment, Space, SpaceColor, InstalledAgent, AcpPermissionBehavior, ClaudeEffort, EngineId, ChatFolder } from "@/types";
+import type { ImageAttachment, Space, SpaceColor, InstalledAgent, AcpPermissionBehavior, ClaudeEffort, EngineId, ChatFolder, MacBackgroundEffect } from "@/types";
 import type { NotificationSettings } from "@/types/ui";
 
 export function useAppOrchestrator() {
+  const MAC_BACKGROUND_EFFECT_RESTART_TOAST_ID = "mac-background-effect-restart";
   const sidebar = useSidebar();
   const splitView = useSplitView();
   const projectManager = useProjectManager();
@@ -166,8 +168,19 @@ export function useAppOrchestrator() {
 
   // ── Glass/transparency support detection ──
   const [glassSupported, setGlassSupported] = useState(false);
+  const [macLiquidGlassSupported, setMacLiquidGlassSupported] = useState<boolean | null>(null);
+  const [liveMacBackgroundEffect, setLiveMacBackgroundEffect] = useState<MacBackgroundEffect>(() => {
+    const stored = localStorage.getItem("harnss-mac-background-effect");
+    if (stored === "liquid-glass" || stored === "vibrancy" || stored === "off") {
+      return stored;
+    }
+    return localStorage.getItem("harnss-transparency") === "false" ? "off" : "liquid-glass";
+  });
   useEffect(() => {
     window.claude.getGlassSupported().then((supported) => setGlassSupported(supported));
+    window.claude.getMacBackgroundEffectSupport().then((support) => {
+      setMacLiquidGlassSupported(!!support.liquidGlass);
+    });
   }, []);
 
   // Keep Electron's native theme in sync so Windows Mica follows the app theme.
@@ -175,17 +188,61 @@ export function useAppOrchestrator() {
     window.claude.setThemeSource(settings.theme);
   }, [settings.theme]);
 
+  useEffect(() => {
+    if (!isMac) return;
+    const requiresRestart = macLiquidGlassSupported !== false
+      && liveMacBackgroundEffect === "liquid-glass"
+      && settings.macBackgroundEffect !== "liquid-glass";
+    if (requiresRestart) return;
+
+    setLiveMacBackgroundEffect(settings.macBackgroundEffect);
+    window.claude.setMacBackgroundEffect(settings.macBackgroundEffect);
+  }, [liveMacBackgroundEffect, macLiquidGlassSupported, settings.macBackgroundEffect]);
+
+  useEffect(() => {
+    if (!isMac) return;
+    const requiresRestart = macLiquidGlassSupported !== false
+      && liveMacBackgroundEffect === "liquid-glass"
+      && settings.macBackgroundEffect !== "liquid-glass";
+
+    if (!requiresRestart) {
+      toast.dismiss(MAC_BACKGROUND_EFFECT_RESTART_TOAST_ID);
+      return;
+    }
+
+    toast("Restart required", {
+      id: MAC_BACKGROUND_EFFECT_RESTART_TOAST_ID,
+      duration: Infinity,
+      description: "Restart Harnss to switch away from Liquid Glass cleanly.",
+      action: {
+        label: "Restart",
+        onClick: () => {
+          void window.claude.relaunchApp();
+        },
+      },
+    });
+  }, [liveMacBackgroundEffect, macLiquidGlassSupported, settings.macBackgroundEffect]);
+
+  useEffect(() => {
+    if (!isMac || macLiquidGlassSupported !== false) return;
+    if (settings.macBackgroundEffect !== "liquid-glass") return;
+    settings.setMacBackgroundEffect("vibrancy");
+  }, [macLiquidGlassSupported, settings.macBackgroundEffect, settings.setMacBackgroundEffect]);
+
   // Toggle the glass-enabled CSS class when the transparency setting changes.
   // Preload applies the initial class from localStorage so first paint stays in sync.
   useEffect(() => {
     if (!glassSupported) return;
     const root = document.documentElement;
-    if (settings.transparency) {
+    const transparencyEnabled = isMac
+      ? liveMacBackgroundEffect !== "off"
+      : settings.transparency;
+    if (transparencyEnabled) {
       root.classList.add("glass-enabled");
     } else {
       root.classList.remove("glass-enabled");
     }
-  }, [settings.transparency, glassSupported]);
+  }, [liveMacBackgroundEffect, settings.transparency, glassSupported]);
 
   // ── Notification settings (loaded from main-process AppSettings) ──
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
@@ -219,6 +276,7 @@ export function useAppOrchestrator() {
   const [scrollToMessageId, setScrollToMessageId] = useState<string | undefined>();
   // In-chat Ctrl+F / Cmd+F search overlay
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
+  const [isSpaceSwitching, setIsSpaceSwitching] = useState(false);
   const spaceTerminals = useSpaceTerminals();
 
   const hasProjects = projectManager.projects.length > 0;
@@ -464,6 +522,7 @@ export function useAppOrchestrator() {
   // ── Space <-> session tracking: switch to last used chat when changing spaces ──
 
   const prevSpaceIdRef = useRef(spaceManager.activeSpaceId);
+  const spaceSwitchRequestIdRef = useRef(0);
 
   const activeSpaceTerminalCwd = activeSpaceProject
     ? (getStoredProjectGitCwd(activeSpaceProject.id) ?? activeSpaceProject.path)
@@ -493,6 +552,28 @@ export function useAppOrchestrator() {
     prevSpaceIdRef.current = next;
     if (prev === next) return;
 
+    const requestId = spaceSwitchRequestIdRef.current + 1;
+    spaceSwitchRequestIdRef.current = requestId;
+    const finishSpaceSwitch = () => {
+      if (spaceSwitchRequestIdRef.current === requestId) {
+        setIsSpaceSwitching(false);
+      }
+    };
+
+    const currentSessionProject = manager.activeSession
+      ? projectManager.projects.find((project) => project.id === manager.activeSession?.projectId) ?? null
+      : null;
+    const currentSessionSpaceId = currentSessionProject?.spaceId || "default";
+    const isCurrentSessionAlreadyInNextSpace = !!manager.activeSession && currentSessionSpaceId === next;
+
+    if (!isCurrentSessionAlreadyInNextSpace) {
+      setIsSpaceSwitching(true);
+      splitView.dismissSplitView();
+      void manager.deselectSession();
+    } else {
+      setIsSpaceSwitching(false);
+    }
+
     const timer = setTimeout(() => {
       // Find projects in the new space
       const spaceProjectIds = new Set(
@@ -503,6 +584,7 @@ export function useAppOrchestrator() {
 
       // Check if current session is already in the new space
       if (manager.activeSession && spaceProjectIds.has(manager.activeSession.projectId)) {
+        finishSpaceSwitch();
         return; // Already in the right space
       }
 
@@ -514,7 +596,7 @@ export function useAppOrchestrator() {
           (s) => s.id === lastSessionId && spaceProjectIds.has(s.projectId),
         );
         if (session) {
-          manager.switchSession(session.id);
+          void manager.switchSession(session.id).finally(finishSpaceSwitch);
           return;
         }
       }
@@ -525,10 +607,10 @@ export function useAppOrchestrator() {
         (p) => (p.spaceId || "default") === next,
       );
       if (firstProjectInSpace) {
-        void handleNewChat(firstProjectInSpace.id);
+        void handleNewChat(firstProjectInSpace.id).finally(finishSpaceSwitch);
       } else {
         // No projects in this space — deselect
-        manager.deselectSession();
+        void manager.deselectSession().finally(finishSpaceSwitch);
       }
     }, 60);
 
@@ -712,11 +794,13 @@ export function useAppOrchestrator() {
   }, [manager.activeSessionId, manager.activeSession?.planMode, manager.isDraft, settings.planMode, settings.setPlanMode]);
 
   // Panel visibility flags
-  const hasRightPanel = ((hasTodos && settings.activeTools.has("tasks")) || (hasAgents && settings.activeTools.has("agents"))) && !!manager.activeSessionId;
+  const hasActiveSessionOrSwitching = !!manager.activeSessionId || isSpaceSwitching;
+  const hasRightPanel = ((hasTodos && settings.activeTools.has("tasks")) || (hasAgents && settings.activeTools.has("agents"))) && hasActiveSessionOrSwitching;
   // Side column only includes active COLUMN tools that are NOT placed in the bottom row
-  const hasToolsColumn = [...settings.activeTools].some((id) => COLUMN_TOOL_IDS.has(id) && !settings.bottomTools.has(id)) && !!manager.activeSessionId;
+  const hasToolsColumn = [...settings.activeTools].some((id) => COLUMN_TOOL_IDS.has(id) && !settings.bottomTools.has(id)) && hasActiveSessionOrSwitching;
   // Bottom tools row: active COLUMN tools that ARE placed in the bottom row
-  const hasBottomTools = [...settings.activeTools].some((id) => COLUMN_TOOL_IDS.has(id) && settings.bottomTools.has(id)) && !!manager.activeSessionId;
+  const hasBottomTools = [...settings.activeTools].some((id) => COLUMN_TOOL_IDS.has(id) && settings.bottomTools.has(id)) && hasActiveSessionOrSwitching;
+  const showToolPicker = !!manager.activeSessionId || isSpaceSwitching;
 
   // ── Dynamic Electron minimum window width ──
   const isSplitViewEnabled = splitView.enabled && splitView.paneCount > 1;
@@ -889,6 +973,8 @@ export function useAppOrchestrator() {
     showThinking,
     settingsEngine,
     hasProjects,
+    isSpaceSwitching,
+    showToolPicker,
     hasRightPanel,
     hasToolsColumn,
     hasBottomTools,
@@ -898,6 +984,8 @@ export function useAppOrchestrator() {
     hasAgents,
     availableContextual,
     glassSupported,
+    macLiquidGlassSupported: macLiquidGlassSupported ?? false,
+    liveMacBackgroundEffect,
     devFillEnabled,
     jiraBoardEnabled,
 

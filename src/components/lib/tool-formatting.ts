@@ -199,6 +199,13 @@ export function formatInput(input: Record<string, unknown>): string {
   return JSON.stringify(input, null, 2);
 }
 
+/** Strip ANSI escape sequences (colors, cursor, reverse-video, etc.) from terminal output. */
+export function stripAnsi(text: string): string {
+  // Matches: ESC[ ... letter  |  ESC] ... ST  |  ESC(single char)
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b[()][A-Z0-9]|\x1b[A-Z@-_]/g, "");
+}
+
 export function formatBashResult(result: UIMessage["toolResult"]): string {
   if (!result) return "";
   const parts: string[] = [];

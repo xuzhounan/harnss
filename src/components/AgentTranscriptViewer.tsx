@@ -30,6 +30,7 @@ const REMARK_PLUGINS = [remarkGfm];
 interface AgentTranscriptViewerProps {
   outputFile: string;
   agentDescription: string;
+  expandEditToolCallsByDefault: boolean;
   onClose: () => void;
 }
 
@@ -70,7 +71,12 @@ type DisplayItem =
  * using the same ToolCall component as the main chat — full BashContent,
  * ReadContent, EditContent, etc.
  */
-export function AgentTranscriptViewer({ outputFile, agentDescription, onClose }: AgentTranscriptViewerProps) {
+export function AgentTranscriptViewer({
+  outputFile,
+  agentDescription,
+  expandEditToolCallsByDefault,
+  onClose,
+}: AgentTranscriptViewerProps) {
   const [items, setItems] = useState<DisplayItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -100,7 +106,7 @@ export function AgentTranscriptViewer({ outputFile, agentDescription, onClose }:
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="max-w-2xl h-[70vh] flex flex-col p-0 gap-0">
+      <DialogContent className="max-w-2xl h-[70vh] flex flex-col p-0 gap-0" aria-describedby={undefined}>
         <DialogHeader className="px-5 pt-5 pb-3 border-b border-border/50 shrink-0">
           <DialogTitle className="flex items-center gap-2 text-sm">
             <AgentIcon icon={CLAUDE_ICON} size={16} className="opacity-60" />
@@ -131,7 +137,11 @@ export function AgentTranscriptViewer({ outputFile, agentDescription, onClose }:
             )}
 
             {items.map((item, i) => (
-              <TranscriptItem key={i} item={item} />
+              <TranscriptItem
+                key={i}
+                item={item}
+                expandEditToolCallsByDefault={expandEditToolCallsByDefault}
+              />
             ))}
           </div>
         </ScrollArea>
@@ -142,7 +152,13 @@ export function AgentTranscriptViewer({ outputFile, agentDescription, onClose }:
 
 // ── Render each display item ──
 
-function TranscriptItem({ item }: { item: DisplayItem }) {
+function TranscriptItem({
+  item,
+  expandEditToolCallsByDefault,
+}: {
+  item: DisplayItem;
+  expandEditToolCallsByDefault: boolean;
+}) {
   switch (item.kind) {
     case "text":
       return <TextRow text={item.text} />;
@@ -151,7 +167,12 @@ function TranscriptItem({ item }: { item: DisplayItem }) {
     case "tool":
       return (
         <div className="px-4 py-0.5">
-          <ToolCall message={item.message} compact autoExpandTools={false} />
+          <ToolCall
+            message={item.message}
+            compact
+            autoExpandTools={false}
+            expandEditToolCallsByDefault={expandEditToolCallsByDefault}
+          />
         </div>
       );
   }
