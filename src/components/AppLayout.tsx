@@ -29,7 +29,6 @@ import { ToolPicker } from "./ToolPicker";
 import { WelcomeScreen } from "./WelcomeScreen";
 import { WelcomeWizard } from "./welcome/WelcomeWizard";
 import { WELCOME_COMPLETED_KEY } from "./welcome/shared";
-import { SpaceCreator } from "./SpaceCreator";
 import { ToolsPanel } from "./ToolsPanel";
 import { BrowserPanel } from "./BrowserPanel";
 import { GitPanel } from "./GitPanel";
@@ -46,10 +45,12 @@ import { SplitHandle } from "./split/SplitHandle";
 import { SplitDropZone } from "./split/SplitDropZone";
 import { PaneToolDrawer } from "./split/PaneToolDrawer";
 import { SplitPaneHost } from "./split/SplitPaneHost";
+import { buildCodexCollabMode } from "@/hooks/session/types";
 import { usePaneResize } from "@/hooks/usePaneResize";
 import { useSplitDragDrop } from "@/hooks/useSplitDragDrop";
 import { MIN_CHAT_WIDTH_SPLIT, SPLIT_HANDLE_WIDTH } from "@/lib/layout-constants";
 import { getMaxVisibleSplitPaneCount } from "@/lib/split-layout";
+import { getStoredProjectGitCwd } from "@/lib/space-projects";
 
 const JIRA_BOARD_BY_SPACE_KEY = "harnss-jira-board-by-space";
 
@@ -75,7 +76,6 @@ export function AppLayout() {
     activeTodos, bgAgents, hasTodos, hasAgents, availableContextual,
     glassSupported, macLiquidGlassSupported, liveMacBackgroundEffect, devFillEnabled, jiraBoardEnabled,
     showSettings, setShowSettings,
-    spaceCreatorOpen, setSpaceCreatorOpen, editingSpace,
     scrollToMessageId, setScrollToMessageId,
     chatSearchOpen, setChatSearchOpen,
     spaceTerminals, activeSpaceTerminals,
@@ -84,20 +84,21 @@ export function AppLayout() {
     handleClaudeModelEffortChange, handleAgentWorktreeChange, handleStop, handleSelectSession,
     handleSendQueuedNow, handleUnqueueMessage,
     handleCreateProject, handleImportCCSession, handleNavigateToMessage,
-    handleCreateSpace, handleEditSpace,
-    handleDeleteSpace, handleSaveSpace, handleMoveProjectToSpace,
+    handleStartCreateSpace, handleConfirmCreateSpace, handleCancelCreateSpace,
+    handleUpdateSpace, handleDeleteSpace, handleMoveProjectToSpace,
+    draftSpaceId,
     handleSeedDevExampleSpaceData,
     splitView,
   } = o;
 
+  // Draft is a real space — activeSpace already points to it, no synthetic needed
   const glassOverlayStyle = useSpaceTheme(
     spaceManager.activeSpace,
     resolvedTheme,
-    glassSupported && (isMac ? liveMacBackgroundEffect !== "off" : settings.transparency),
+    glassSupported && settings.transparency,
     liveMacBackgroundEffect,
   );
-  const isGlassActive = glassSupported
-    && (isMac ? liveMacBackgroundEffect !== "off" : settings.transparency);
+  const isGlassActive = glassSupported && settings.transparency;
   const isLightGlass = isGlassActive && resolvedTheme !== "dark";
   const isNativeGlass = isGlassActive && isMac && liveMacBackgroundEffect === "liquid-glass";
 
@@ -180,8 +181,8 @@ export function AppLayout() {
 
   // Wrap handleSend to clear grabbed elements after sending
   const wrappedHandleSend = useCallback(
-    (...args: Parameters<typeof handleSend>) => {
-      handleSend(...args);
+    async (...args: Parameters<typeof handleSend>) => {
+      await handleSend(...args);
       setGrabbedElements([]);
     },
     [handleSend],
@@ -370,6 +371,7 @@ Link: ${issue.url}`;
 
   const isSplitActive = splitView.enabled;
   const splitPaneSessionIds = splitView.visibleSessionIds;
+  const previousActiveSplitSessionIdRef = useRef<string | null>(manager.activeSessionId);
 
   // ── Drag-and-drop from sidebar ──
   const visibleSessionIds = useMemo(() => {
@@ -405,9 +407,33 @@ Link: ${issue.url}`;
   ]);
 
   useEffect(() => {
+    const previousActiveSessionId = previousActiveSplitSessionIdRef.current;
+    const nextActiveSessionId = manager.activeSessionId;
+    previousActiveSplitSessionIdRef.current = nextActiveSessionId;
+
+    if (!previousActiveSessionId || !nextActiveSessionId || previousActiveSessionId === nextActiveSessionId) {
+      return;
+    }
+
+    if (!splitView.visibleSessionIds.includes(previousActiveSessionId)) {
+      return;
+    }
+
     const validSessionIds = new Set(manager.sessions.map((session) => session.id));
+    if (validSessionIds.has(previousActiveSessionId)) {
+      return;
+    }
+
+    splitView.replaceSessionId(previousActiveSessionId, nextActiveSessionId);
+  }, [manager.activeSessionId, manager.sessions, splitView.replaceSessionId, splitView.visibleSessionIds]);
+
+  useEffect(() => {
+    const validSessionIds = new Set(manager.sessions.map((session) => session.id));
+    if (manager.activeSessionId) {
+      validSessionIds.add(manager.activeSessionId);
+    }
     splitView.pruneSplitSessions(validSessionIds);
-  }, [manager.sessions, splitView.pruneSplitSessions]);
+  }, [manager.activeSessionId, manager.sessions, splitView.pruneSplitSessions]);
 
   const requestAddSplitSession = useCallback((sessionId: string, position?: number) => {
     const result = splitView.requestAddSplitSession({
@@ -611,6 +637,13 @@ Link: ${issue.url}`;
   ) => {
     const drawer = splitView.getDrawerState(sessionId);
     const { widthPercent, handleSharePx } = getPreviewPaneMetrics(previewIndex);
+    const paneProject = session
+      ? projectManager.projects.find((project) => project.id === session.projectId) ?? null
+      : null;
+    const paneProjectPath = paneProject
+      ? (getStoredProjectGitCwd(paneProject.id) ?? paneProject.path)
+      : activeProjectPath;
+    const paneProjectRoot = paneProject?.path;
     const selectedPaneAgent = isActiveSessionPane
       ? selectedAgent
       : session?.agentId
@@ -618,6 +651,59 @@ Link: ${issue.url}`;
         : session?.engine === "codex"
           ? agents.find((agent) => agent.engine === "codex") ?? null
           : null;
+    const handlePaneSend = async (text: string, images?: Parameters<typeof handleSend>[1], displayText?: string) => {
+      splitView.setFocusedSession(sessionId);
+
+      if (isActiveSessionPane) {
+        await wrappedHandleSend(text, images, displayText);
+        return;
+      }
+
+      if (!session) {
+        return;
+      }
+
+      if (!paneState.isConnected) {
+        await manager.switchSession(sessionId);
+        await manager.send(text, images, displayText);
+        return;
+      }
+
+      if (session.engine === "acp") {
+        await paneState.acp.send(text, images, displayText);
+        return;
+      }
+
+      if (session.engine === "codex") {
+        try {
+          const collaborationMode = buildCodexCollabMode(session.planMode, session.model);
+          const sent = await paneState.codex.send(text, images, displayText, collaborationMode);
+          if (!sent) {
+            await manager.switchSession(sessionId);
+            await manager.send(text, images, displayText);
+          }
+        } catch (err) {
+          toast.error("Failed to send message", {
+            description: err instanceof Error ? err.message : String(err),
+          });
+        }
+        return;
+      }
+
+      const sent = await paneState.claude.send(text, images, displayText);
+      if (!sent) {
+        await manager.switchSession(sessionId);
+        await manager.send(text, images, displayText);
+      }
+    };
+    const handlePaneStop = async () => {
+      splitView.setFocusedSession(sessionId);
+      if (isActiveSessionPane) {
+        await handleStop();
+        return;
+      }
+      await paneState.engine.interrupt();
+    };
 
     return (
       <motion.div
@@ -659,8 +745,8 @@ Link: ${issue.url}`;
               totalCost={paneState.totalCost}
               title={session?.title}
               titleGenerating={session?.titleGenerating}
-              planMode={isActiveSessionPane ? settings.planMode : false}
-              permissionMode={isActiveSessionPane ? manager.sessionInfo?.permissionMode : undefined}
+              planMode={isActiveSessionPane ? settings.planMode : !!session?.planMode}
+              permissionMode={paneState.sessionInfo?.permissionMode}
               acpPermissionBehavior={isActiveSessionPane && session?.engine === "acp" ? settings.acpPermissionBehavior : undefined}
               onToggleSidebar={displayIndex === 0 ? sidebar.toggle : () => {}}
               showDevFill={isActiveSessionPane ? devFillEnabled : false}
@@ -689,40 +775,40 @@ Link: ${issue.url}`;
             onTopScrollProgress={paneScrollCallbacks[displayIndex]}
             agents={agents}
             selectedAgent={selectedPaneAgent}
-            onAgentChange={handleAgentChange}
+            onAgentChange={isActiveSessionPane ? handleAgentChange : undefined}
           />
           <div
             className={`pointer-events-none absolute inset-x-0 bottom-0 z-[5] transition-opacity duration-200 ${isIsland ? "h-24" : "h-28"}`}
             style={{ opacity: chatFadeStrength, background: bottomFadeBackground }}
           />
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10">
+          <div data-chat-composer className="pointer-events-none absolute inset-x-0 bottom-0 z-10">
             <BottomComposer
               pendingPermission={paneState.pendingPermission}
               onRespondPermission={paneState.engine.respondPermission}
-              onSend={wrappedHandleSend}
-              onClear={handleComposerClear}
-              onStop={handleStop}
+              onSend={handlePaneSend}
+              onClear={isActiveSessionPane ? handleComposerClear : undefined}
+              onStop={handlePaneStop}
               isProcessing={paneState.isProcessing}
               queuedCount={isActiveSessionPane ? manager.queuedCount : 0}
-              model={settings.model}
+              model={session?.model ?? paneState.sessionInfo?.model ?? settings.model}
               claudeEffort={settings.claudeEffort}
-              planMode={isActiveSessionPane ? settings.planMode : false}
+              planMode={isActiveSessionPane ? settings.planMode : !!session?.planMode}
               permissionMode={paneState.sessionInfo?.permissionMode ?? settings.permissionMode}
               onModelChange={handleModelChange}
               onClaudeModelEffortChange={handleClaudeModelEffortChange}
               onPlanModeChange={handlePlanModeChange}
               onPermissionModeChange={handlePermissionModeChange}
-              projectPath={activeProjectPath}
+              projectPath={paneProjectPath}
               contextUsage={paneState.contextUsage}
               isCompacting={paneState.isCompacting}
               onCompact={paneState.engine.compact}
               agents={agents}
               selectedAgent={selectedPaneAgent}
-              onAgentChange={handleAgentChange}
+              onAgentChange={isActiveSessionPane ? handleAgentChange : undefined}
               slashCommands={isActiveSessionPane ? manager.slashCommands : paneState.engine.slashCommands}
-              acpConfigOptions={isActiveSessionPane ? manager.acpConfigOptions : undefined}
+              acpConfigOptions={isActiveSessionPane ? manager.acpConfigOptions : paneState.acp.configOptions}
               acpConfigOptionsLoading={isActiveSessionPane ? manager.acpConfigOptionsLoading : false}
-              onACPConfigChange={isActiveSessionPane ? manager.setACPConfig : undefined}
+              onACPConfigChange={isActiveSessionPane ? manager.setACPConfig : paneState.acp.setConfig}
               acpPermissionBehavior={isActiveSessionPane ? settings.acpPermissionBehavior : undefined}
               onAcpPermissionBehaviorChange={isActiveSessionPane ? settings.setAcpPermissionBehavior : undefined}
               supportedModels={
@@ -744,7 +830,11 @@ Link: ${issue.url}`;
               onRemoveGrabbedElement={handleRemoveGrabbedElement}
               lockedEngine={isActiveSessionPane ? lockedEngine : (session?.engine ?? null)}
               lockedAgentId={isActiveSessionPane ? lockedAgentId : (session?.agentId ?? null)}
+              selectedWorktreePath={paneProjectPath}
+              onSelectWorktree={isActiveSessionPane ? handleAgentWorktreeChange : undefined}
+              isEmptySession={paneState.messages.length === 0}
               isIslandLayout={isIsland}
+              controlsReadOnly={!isActiveSessionPane}
             />
           </div>
         </div>
@@ -771,37 +861,37 @@ Link: ${issue.url}`;
           )}
           {drawer.activeTab === "git" && (
             <GitPanel
-              cwd={activeSpaceProject?.path}
+              cwd={paneProjectRoot}
               collapsedRepos={settings.collapsedRepos}
               onToggleRepoCollapsed={settings.toggleRepoCollapsed}
-              selectedWorktreePath={activeSpaceTerminalCwd}
-              onSelectWorktreePath={handleAgentWorktreeChange}
+              selectedWorktreePath={paneProjectPath}
+              onSelectWorktreePath={isActiveSessionPane ? handleAgentWorktreeChange : undefined}
               activeEngine={session?.engine}
               activeSessionId={sessionId}
             />
           )}
           {drawer.activeTab === "browser" && (
-            <BrowserPanel onElementGrab={handleElementGrab} />
+            <BrowserPanel onElementGrab={isActiveSessionPane ? handleElementGrab : undefined} />
           )}
           {drawer.activeTab === "files" && (
             <FilesPanel
               sessionId={sessionId}
               messages={paneState.messages}
-              cwd={activeProjectPath}
+              cwd={paneProjectPath}
               activeEngine={session?.engine}
               onScrollToToolCall={setScrollToMessageId}
               enabled={true}
             />
           )}
           {drawer.activeTab === "project-files" && (
-            <ProjectFilesPanel cwd={activeProjectPath} enabled={true} onPreviewFile={handlePreviewFile} />
+            <ProjectFilesPanel cwd={paneProjectPath} enabled={true} onPreviewFile={handlePreviewFile} />
           )}
           {drawer.activeTab === "mcp" && (
             <McpPanel
-              projectId={activeProjectId ?? null}
+              projectId={paneProject?.id ?? null}
               runtimeStatuses={manager.mcpServerStatuses}
-              isPreliminary={manager.mcpStatusPreliminary}
-              hasLiveSession={!manager.isDraft}
+              isPreliminary={isActiveSessionPane ? manager.mcpStatusPreliminary : false}
+              hasLiveSession={paneState.isConnected}
               onRefreshStatus={manager.refreshMcpStatus}
               onReconnect={manager.reconnectMcpServer}
               onRestartWithServers={manager.restartWithMcpServers}
@@ -810,7 +900,7 @@ Link: ${issue.url}`;
         </PaneToolDrawer>
       </motion.div>
     );
-  }, [activeProjectPath, activeSpaceProject?.path, activeSpaceTerminalCwd, activeSpaceTerminals.activeTabId, activeSpaceTerminals.tabs, agents, availableContextual, bottomFadeBackground, chatFadeStrength, devFillEnabled, getPreviewPaneMetrics, grabbedElements, handleAgentChange, handleAgentWorktreeChange, handleClaudeModelEffortChange, handleCloseSplitPane, handleComposerClear, handleElementGrab, handleFullRevert, handleModelChange, handlePermissionModeChange, handlePlanModeChange, handleRemoveGrabbedElement, handleRevert, handleSeedDevExampleSpaceData, handleStop, isIsland, isSpaceSwitching, lockedAgentId, lockedEngine, manager, paneScrollCallbacks, resolvedTheme, selectedAgent, settings, showThinking, shouldAnimateTopRowLayout, sidebar.isOpen, sidebar.toggle, spaceManager.activeSpaceId, spaceTerminals, splitView, titlebarSurfaceColor, topFadeBackground]);
+  }, [activeProjectPath, activeSpaceTerminalCwd, activeSpaceTerminals.activeTabId, activeSpaceTerminals.tabs, agents, availableContextual, bottomFadeBackground, chatFadeStrength, devFillEnabled, getPreviewPaneMetrics, grabbedElements, handleAgentChange, handleAgentWorktreeChange, handleClaudeModelEffortChange, handleCloseSplitPane, handleComposerClear, handleElementGrab, handleFullRevert, handleModelChange, handlePermissionModeChange, handlePlanModeChange, handleRemoveGrabbedElement, handleRevert, handleSeedDevExampleSpaceData, handleSend, handleStop, isIsland, lockedAgentId, lockedEngine, manager, paneScrollCallbacks, projectManager.projects, resolvedTheme, selectedAgent, settings, shouldAnimateTopRowLayout, showThinking, sidebar.isOpen, sidebar.toggle, spaceManager.activeSpaceId, spaceTerminals, splitView, titlebarSurfaceColor, topFadeBackground, wrappedHandleSend]);
 
   const { activeTools } = settings;
   const showCodexAuthDialog =
@@ -837,12 +927,6 @@ Link: ${issue.url}`;
           style={{ background: isLightGlass ? "rgba(255,255,255,0.38)" : "rgba(0,0,0,0.34)" }}
         />
       )}
-      <SpaceCreator
-        open={spaceCreatorOpen}
-        onOpenChange={setSpaceCreatorOpen}
-        editingSpace={editingSpace}
-        onSave={handleSaveSpace}
-      />
       <AppSidebar
         isOpen={sidebar.isOpen}
         islandLayout={settings.islandLayout}
@@ -877,10 +961,13 @@ Link: ${issue.url}`;
         spaces={spaceManager.spaces}
         activeSpaceId={spaceManager.activeSpaceId}
         onSelectSpace={spaceManager.setActiveSpaceId}
-        onCreateSpace={handleCreateSpace}
-        onEditSpace={handleEditSpace}
+        onStartCreateSpace={handleStartCreateSpace}
+        onUpdateSpace={handleUpdateSpace}
         onDeleteSpace={handleDeleteSpace}
         onOpenSettings={() => setShowSettings(true)}
+        draftSpaceId={draftSpaceId}
+        onConfirmCreateSpace={handleConfirmCreateSpace}
+        onCancelCreateSpace={handleCancelCreateSpace}
         agents={agents}
         onOpenInSplitView={(sessionId) => {
           void requestAddSplitSession(sessionId);
@@ -1160,7 +1247,7 @@ Link: ${issue.url}`;
                   background: bottomFadeBackground,
                 }}
               />
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10">
+              <div data-chat-composer className="pointer-events-none absolute inset-x-0 bottom-0 z-10">
                 <BottomComposer
                   pendingPermission={manager.pendingPermission}
                   onRespondPermission={manager.respondPermission}
@@ -1199,6 +1286,9 @@ Link: ${issue.url}`;
                   onRemoveGrabbedElement={handleRemoveGrabbedElement}
                   lockedEngine={lockedEngine}
                   lockedAgentId={lockedAgentId}
+                  selectedWorktreePath={activeSpaceTerminalCwd}
+                  onSelectWorktree={handleAgentWorktreeChange}
+                  isEmptySession={manager.messages.length === 0}
                   isIslandLayout={isIsland}
                 />
               </div>
@@ -1276,7 +1366,7 @@ Link: ${issue.url}`;
             >
             {/* Resize handle — between chat and right panel */}
             <div
-              className="resize-col group flex w-2 shrink-0 cursor-col-resize items-center justify-center"
+              className="resize-col flat-divider-soft group flex w-2 shrink-0 cursor-col-resize items-center justify-center"
               style={isIsland ? { width: "var(--island-panel-gap)" } : undefined}
               onMouseDown={handleResizeStart}
             >
@@ -1434,7 +1524,7 @@ Link: ${issue.url}`;
               {/* Resize handle — only visible when side tools column is showing */}
               {hasToolsColumn && (
                 <div
-                  className="resize-col group flex w-2 shrink-0 cursor-col-resize items-center justify-center"
+                  className="resize-col flat-divider-soft group flex w-2 shrink-0 cursor-col-resize items-center justify-center"
                   style={isIsland ? { width: "var(--island-panel-gap)" } : undefined}
                   onMouseDown={handleToolsResizeStart}
                 >
@@ -1495,7 +1585,7 @@ Link: ${issue.url}`;
               transition={shouldAnimateTopRowLayout
                 ? { type: "spring", stiffness: 380, damping: 34, mass: 0.65 }
                 : { duration: 0 }}
-              className={`${isIsland ? "ms-[var(--island-panel-gap)]" : "tool-picker-shell"} shrink-0 overflow-hidden ${
+              className={`${isIsland ? "ms-[var(--island-panel-gap)]" : "tool-picker-shell flat-divider-soft"} shrink-0 overflow-hidden ${
                 showSinglePaneSplitPreview || isSpaceSwitching && !manager.activeSessionId
                   ? "pointer-events-none"
                   : ""
@@ -1604,7 +1694,7 @@ Link: ${issue.url}`;
             <>
             {/* Resize handle — between top area and bottom tools row */}
             <div
-              className={`resize-row group flex h-2 shrink-0 cursor-row-resize items-center justify-center ${!hasBottomTools ? "hidden" : ""}`}
+              className={`resize-row flat-divider-soft group flex h-2 shrink-0 cursor-row-resize items-center justify-center ${!hasBottomTools ? "hidden" : ""}`}
               style={isIsland ? { height: "var(--island-panel-gap)" } : undefined}
               onMouseDown={handleBottomResizeStart}
             >
@@ -1636,7 +1726,7 @@ Link: ${issue.url}`;
                     </div>
                     {isActive && activeIdx < bottomCount - 1 && (
                       <div
-                        className="resize-col group flex w-2 shrink-0 cursor-col-resize items-center justify-center"
+                        className="resize-col flat-divider-soft group flex w-2 shrink-0 cursor-col-resize items-center justify-center"
                         style={isIsland ? { width: "var(--island-panel-gap)" } : undefined}
                         onMouseDown={(e) => handleBottomSplitStart(e, activeIdx)}
                       >

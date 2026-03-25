@@ -19,6 +19,7 @@ export type VoiceDictationMode = "native" | "whisper";
 export type NotificationTrigger = "always" | "unfocused" | "never";
 export type CodexBinarySource = "auto" | "managed" | "custom";
 export type ClaudeBinarySource = "auto" | "managed" | "custom";
+export type MacBackgroundEffect = "liquid-glass" | "vibrancy" | "off";
 
 export interface NotificationEventSettings {
   osNotification: NotificationTrigger;
@@ -57,6 +58,8 @@ export interface AppSettings {
   showDevFillInChatTitleBar: boolean;
   /** Show the Jira board UI in the sidebar and main panel (developer preview, default: false) */
   showJiraBoard: boolean;
+  /** Preferred native macOS background material when window transparency is enabled */
+  macBackgroundEffect: MacBackgroundEffect;
   /** Enable anonymous analytics to help improve the app (default: true) */
   analyticsEnabled: boolean;
   /** Anonymous user ID for analytics (auto-generated) */
@@ -85,6 +88,7 @@ const DEFAULTS: AppSettings = {
   claudeCustomBinaryPath: "",
   showDevFillInChatTitleBar: false,
   showJiraBoard: false,
+  macBackgroundEffect: "liquid-glass",
   analyticsEnabled: true,
 };
 

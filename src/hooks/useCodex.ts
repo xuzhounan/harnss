@@ -8,7 +8,7 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
-import type { TodoItem, PermissionBehavior, ModelInfo, ImageAttachment, SessionMeta, SlashCommand } from "@/types";
+import type { TodoItem, PermissionBehavior, ModelInfo, ImageAttachment, SessionInfo, SessionMeta, SlashCommand } from "@/types";
 import type { CodexSessionEvent, CodexServerRequest, CodexExitEvent } from "@/types/codex";
 import type { CodexTokenUsageNotification } from "@/types/codex";
 import type { CollaborationMode } from "@/types/codex-protocol/CollaborationMode";
@@ -52,6 +52,25 @@ function showCodexPermissionError(message: string): void {
   toast.error("Failed to respond to permission prompt", {
     description: message,
   });
+}
+
+export function upsertCodexSessionInfo(
+  prev: SessionInfo | null,
+  sessionId: string | null,
+  sessionModel: string | undefined,
+  permissionMode: string | undefined,
+): SessionInfo | null {
+  if (!prev && !sessionId) return null;
+
+  return {
+    sessionId: prev?.sessionId ?? sessionId ?? "",
+    model: prev?.model?.trim() || sessionModel?.trim() || "",
+    cwd: prev?.cwd ?? "",
+    tools: prev?.tools ?? [],
+    version: prev?.version ?? "",
+    ...(prev?.agentName ? { agentName: prev.agentName } : {}),
+    ...(permissionMode ? { permissionMode } : {}),
+  };
 }
 
 interface CodexQuestionOption {
@@ -533,9 +552,13 @@ export function useCodex({
           // Only keep the session in plan mode while the toggle is still enabled.
           // If the user already turned it off, just show the plan result and do not
           // re-open the synthetic ExitPlanMode gate.
-          setSessionInfo((prev) => prev
-            ? { ...prev, permissionMode: "plan" }
-            : prev,
+          setSessionInfo((prev) =>
+            upsertCodexSessionInfo(
+              prev,
+              sessionIdRef.current,
+              sessionModelRef.current,
+              "plan",
+            ),
           );
 
           setPendingPermission({
@@ -1010,8 +1033,16 @@ export function useCodex({
           const ok = await send("Implement the plan.", undefined, undefined, collaborationMode);
           if (!ok) return;
 
-          // User accepted — update sessionInfo so AppLayout's planMode sync fires
-          setSessionInfo((prev) => prev ? { ...prev, permissionMode: _newPermissionMode } : prev);
+          // Preserve the selected implementation mode so plan-mode sync and
+          // future Codex turns do not fall back to the stale pre-plan setting.
+          setSessionInfo((prev) =>
+            upsertCodexSessionInfo(
+              prev,
+              sessionId,
+              model,
+              _newPermissionMode,
+            ),
+          );
         }
         setPendingPermission(null);
         return;

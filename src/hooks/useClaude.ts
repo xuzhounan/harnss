@@ -483,7 +483,7 @@ export function useClaude({ sessionId, initialMessages, initialMeta, initialPerm
           // Extract per-message usage for context tracking
           const nextUsage = extractAssistantContextUsage(
             event.message,
-            contextUsage?.contextWindow ?? 200_000,
+            contextUsage?.contextWindow,
           );
           if (nextUsage) {
             setContextUsage(nextUsage);
@@ -720,7 +720,15 @@ export function useClaude({ sessionId, initialMessages, initialMeta, initialPerm
             const primaryEntry = entries.find((e) => e.contextWindow > 0);
             if (primaryEntry) {
               setContextUsage((prev) =>
-                prev ? { ...prev, contextWindow: primaryEntry.contextWindow } : prev,
+                prev
+                  ? { ...prev, contextWindow: primaryEntry.contextWindow }
+                  : {
+                      inputTokens: 0,
+                      outputTokens: 0,
+                      cacheReadTokens: 0,
+                      cacheCreationTokens: 0,
+                      contextWindow: primaryEntry.contextWindow,
+                    },
               );
             }
           }

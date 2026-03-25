@@ -21,8 +21,22 @@ import { getStoredProjectGitCwd, resolveProjectForSpace } from "@/lib/space-proj
 import { getTodoItems } from "@/lib/todo-utils";
 import { isMac, isWindows } from "@/lib/utils";
 import { COLUMN_TOOL_IDS, type ToolId } from "@/components/ToolPicker";
-import type { ImageAttachment, Space, SpaceColor, InstalledAgent, AcpPermissionBehavior, ClaudeEffort, EngineId, ChatFolder, MacBackgroundEffect } from "@/types";
+import type { ImageAttachment, Space, InstalledAgent, AcpPermissionBehavior, ClaudeEffort, EngineId, ChatFolder, MacBackgroundEffect } from "@/types";
 import type { NotificationSettings } from "@/types/ui";
+import { SPACE_COLOR_PRESETS } from "@/hooks/useSpaceManager";
+
+type MacNativeBackgroundEffect = Exclude<MacBackgroundEffect, "off">;
+
+export function getSyncedPlanMode(
+  sessionPlanMode: boolean | undefined,
+  permissionMode: string | undefined,
+): boolean {
+  const normalizedPermissionMode = permissionMode?.trim();
+  if (normalizedPermissionMode) {
+    return normalizedPermissionMode === "plan";
+  }
+  return !!sessionPlanMode;
+}
 
 export function useAppOrchestrator() {
   const MAC_BACKGROUND_EFFECT_RESTART_TOAST_ID = "mac-background-effect-restart";
@@ -169,18 +183,33 @@ export function useAppOrchestrator() {
   // ── Glass/transparency support detection ──
   const [glassSupported, setGlassSupported] = useState(false);
   const [macLiquidGlassSupported, setMacLiquidGlassSupported] = useState<boolean | null>(null);
-  const [liveMacBackgroundEffect, setLiveMacBackgroundEffect] = useState<MacBackgroundEffect>(() => {
+  const [liveMacBackgroundEffect, setLiveMacBackgroundEffect] = useState<MacNativeBackgroundEffect>(() => {
     const stored = localStorage.getItem("harnss-mac-background-effect");
-    if (stored === "liquid-glass" || stored === "vibrancy" || stored === "off") {
-      return stored;
-    }
-    return localStorage.getItem("harnss-transparency") === "false" ? "off" : "liquid-glass";
+    return stored === "vibrancy" ? "vibrancy" : "liquid-glass";
   });
   useEffect(() => {
     window.claude.getGlassSupported().then((supported) => setGlassSupported(supported));
     window.claude.getMacBackgroundEffectSupport().then((support) => {
       setMacLiquidGlassSupported(!!support.liquidGlass);
     });
+  }, []);
+
+  useEffect(() => {
+    if (!isMac) return;
+    let cancelled = false;
+
+    window.claude.settings.get().then((appSettings) => {
+      if (cancelled) return;
+      setLiveMacBackgroundEffect(appSettings?.macBackgroundEffect === "vibrancy"
+        ? "vibrancy"
+        : "liquid-glass");
+    }).catch(() => {
+      // Keep the renderer-local fallback when app settings are unavailable.
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Keep Electron's native theme in sync so Windows Mica follows the app theme.
@@ -190,20 +219,20 @@ export function useAppOrchestrator() {
 
   useEffect(() => {
     if (!isMac) return;
-    const requiresRestart = macLiquidGlassSupported !== false
-      && liveMacBackgroundEffect === "liquid-glass"
-      && settings.macBackgroundEffect !== "liquid-glass";
-    if (requiresRestart) return;
+    const desiredNativeEffect = settings.macBackgroundEffect === "off"
+      ? null
+      : settings.macBackgroundEffect;
+    if (!desiredNativeEffect || desiredNativeEffect === liveMacBackgroundEffect) return;
+    if (liveMacBackgroundEffect === "liquid-glass" && desiredNativeEffect === "vibrancy") return;
 
-    setLiveMacBackgroundEffect(settings.macBackgroundEffect);
-    window.claude.setMacBackgroundEffect(settings.macBackgroundEffect);
-  }, [liveMacBackgroundEffect, macLiquidGlassSupported, settings.macBackgroundEffect]);
+    setLiveMacBackgroundEffect(desiredNativeEffect);
+    window.claude.setMacBackgroundEffect(desiredNativeEffect);
+  }, [liveMacBackgroundEffect, settings.macBackgroundEffect]);
 
   useEffect(() => {
     if (!isMac) return;
-    const requiresRestart = macLiquidGlassSupported !== false
-      && liveMacBackgroundEffect === "liquid-glass"
-      && settings.macBackgroundEffect !== "liquid-glass";
+    const requiresRestart = settings.macBackgroundEffect === "vibrancy"
+      && liveMacBackgroundEffect === "liquid-glass";
 
     if (!requiresRestart) {
       toast.dismiss(MAC_BACKGROUND_EFFECT_RESTART_TOAST_ID);
@@ -221,7 +250,7 @@ export function useAppOrchestrator() {
         },
       },
     });
-  }, [liveMacBackgroundEffect, macLiquidGlassSupported, settings.macBackgroundEffect]);
+  }, [liveMacBackgroundEffect, settings.macBackgroundEffect]);
 
   useEffect(() => {
     if (!isMac || macLiquidGlassSupported !== false) return;
@@ -234,15 +263,12 @@ export function useAppOrchestrator() {
   useEffect(() => {
     if (!glassSupported) return;
     const root = document.documentElement;
-    const transparencyEnabled = isMac
-      ? liveMacBackgroundEffect !== "off"
-      : settings.transparency;
-    if (transparencyEnabled) {
+    if (settings.transparency) {
       root.classList.add("glass-enabled");
     } else {
       root.classList.remove("glass-enabled");
     }
-  }, [liveMacBackgroundEffect, settings.transparency, glassSupported]);
+  }, [settings.transparency, glassSupported]);
 
   // ── Notification settings (loaded from main-process AppSettings) ──
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
@@ -271,12 +297,16 @@ export function useAppOrchestrator() {
     if (!showSettings) window.dispatchEvent(new Event("resize"));
   }, [showSettings]);
 
-  const [spaceCreatorOpen, setSpaceCreatorOpen] = useState(false);
-  const [editingSpace, setEditingSpace] = useState<Space | null>(null);
   const [scrollToMessageId, setScrollToMessageId] = useState<string | undefined>();
   // In-chat Ctrl+F / Cmd+F search overlay
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
   const [isSpaceSwitching, setIsSpaceSwitching] = useState(false);
+
+  // ── Draft space creation — a real space marked as draft until confirmed ──
+  const [draftSpaceId, setDraftSpaceId] = useState<string | null>(null);
+  const draftSpaceIdRef = useRef<string | null>(null);
+  // Keep ref in sync for use in effects that shouldn't depend on draftSpaceId
+  useEffect(() => { draftSpaceIdRef.current = draftSpaceId; }, [draftSpaceId]);
   const spaceTerminals = useSpaceTerminals();
 
   const hasProjects = projectManager.projects.length > 0;
@@ -476,15 +506,58 @@ export function useAppOrchestrator() {
     [manager.switchSession],
   );
 
-  const handleCreateSpace = useCallback(() => {
-    setEditingSpace(null);
-    setSpaceCreatorOpen(true);
-  }, []);
+  // Remember previous space/session so we can restore on cancel
+  const preDraftSpaceRef = useRef<string | null>(null);
+  const preDraftSessionRef = useRef<string | null>(null);
 
-  const handleEditSpace = useCallback((space: Space) => {
-    setEditingSpace(space);
-    setSpaceCreatorOpen(true);
-  }, []);
+  const handleStartCreateSpace = useCallback(async () => {
+    const randomColor = SPACE_COLOR_PRESETS[1 + Math.floor(Math.random() * (SPACE_COLOR_PRESETS.length - 1))];
+    preDraftSpaceRef.current = spaceManager.activeSpaceId;
+    preDraftSessionRef.current = manager.activeSessionId;
+
+    // Create a real space with defaults
+    const space = await spaceManager.createSpace("", "⭐", "emoji", randomColor);
+    spaceManager.setActiveSpaceId(space.id);
+    setDraftSpaceId(space.id);
+  }, [spaceManager.activeSpaceId, spaceManager.createSpace, spaceManager.setActiveSpaceId, manager.activeSessionId]);
+
+  const handleConfirmCreateSpace = useCallback(() => {
+    // The space already exists — just clear draft flag
+    const draft = draftSpaceId ? spaceManager.spaces.find((s) => s.id === draftSpaceId) : null;
+    if (!draft || !draft.name.trim()) return;
+    setDraftSpaceId(null);
+    preDraftSpaceRef.current = null;
+    preDraftSessionRef.current = null;
+  }, [draftSpaceId, spaceManager.spaces]);
+
+  const handleCancelCreateSpace = useCallback(async () => {
+    const draftId = draftSpaceId;
+    setDraftSpaceId(null);
+
+    // Delete the draft space
+    if (draftId) {
+      await spaceManager.deleteSpace(draftId);
+    }
+
+    // Restore previous space and session
+    const prevSpace = preDraftSpaceRef.current;
+    if (prevSpace) {
+      spaceManager.setActiveSpaceId(prevSpace);
+    }
+    const prevSession = preDraftSessionRef.current;
+    if (prevSession) {
+      setTimeout(() => manager.switchSession(prevSession), 60);
+    }
+    preDraftSpaceRef.current = null;
+    preDraftSessionRef.current = null;
+  }, [draftSpaceId, spaceManager.deleteSpace, spaceManager.setActiveSpaceId, manager.switchSession]);
+
+  const handleUpdateSpace = useCallback(
+    (id: string, updates: Partial<Pick<Space, "name" | "icon" | "iconType" | "color">>) => {
+      void spaceManager.updateSpace(id, updates);
+    },
+    [spaceManager.updateSpace],
+  );
 
   const handleDeleteSpace = useCallback(
     async (id: string) => {
@@ -499,17 +572,6 @@ export function useAppOrchestrator() {
       }
     },
     [spaceManager.deleteSpace, spaceTerminals, projectManager.projects, projectManager.updateProjectSpace],
-  );
-
-  const handleSaveSpace = useCallback(
-    async (name: string, icon: string, iconType: "emoji" | "lucide", color: SpaceColor) => {
-      if (editingSpace) {
-        await spaceManager.updateSpace(editingSpace.id, { name, icon, iconType, color });
-      } else {
-        await spaceManager.createSpace(name, icon, iconType, color);
-      }
-    },
-    [editingSpace, spaceManager.updateSpace, spaceManager.createSpace],
   );
 
   const handleMoveProjectToSpace = useCallback(
@@ -543,6 +605,19 @@ export function useAppOrchestrator() {
     localStorage.setItem(LAST_SESSION_KEY, JSON.stringify(map));
   }, [manager.activeSessionId, manager.isDraft, manager.sessions, projectManager.projects, readLastSessionMap]);
 
+  // If the user clicks another space while drafting, cancel the draft and restore session
+  useEffect(() => {
+    if (!draftSpaceId || spaceManager.activeSpaceId === draftSpaceId) return;
+    void spaceManager.deleteSpace(draftSpaceId);
+    const prevSession = preDraftSessionRef.current;
+    if (prevSession) {
+      setTimeout(() => manager.switchSession(prevSession), 60);
+    }
+    setDraftSpaceId(null);
+    preDraftSpaceRef.current = null;
+    preDraftSessionRef.current = null;
+  }, [spaceManager.activeSpaceId, draftSpaceId, spaceManager.deleteSpace, manager.switchSession]);
+
   // When activeSpaceId changes, switch to last used session in that space.
   // Debounced by 60ms to coalesce rapid space switches and prevent race conditions
   // between concurrent switchSession/createSession calls.
@@ -551,6 +626,7 @@ export function useAppOrchestrator() {
     const next = spaceManager.activeSpaceId;
     prevSpaceIdRef.current = next;
     if (prev === next) return;
+    if (next === draftSpaceIdRef.current) return;
 
     const requestId = spaceSwitchRequestIdRef.current + 1;
     spaceSwitchRequestIdRef.current = requestId;
@@ -789,9 +865,19 @@ export function useAppOrchestrator() {
   // Keep plan toggle scoped to the active chat session.
   useEffect(() => {
     if (!manager.activeSessionId || manager.isDraft || !manager.activeSession) return;
-    const nextPlanMode = !!manager.activeSession.planMode;
+    const nextPlanMode = getSyncedPlanMode(
+      manager.activeSession.planMode,
+      manager.sessionInfo?.permissionMode,
+    );
     if (settings.planMode !== nextPlanMode) settings.setPlanMode(nextPlanMode);
-  }, [manager.activeSessionId, manager.activeSession?.planMode, manager.isDraft, settings.planMode, settings.setPlanMode]);
+  }, [
+    manager.activeSessionId,
+    manager.activeSession?.planMode,
+    manager.isDraft,
+    manager.sessionInfo?.permissionMode,
+    settings.planMode,
+    settings.setPlanMode,
+  ]);
 
   // Panel visibility flags
   const hasActiveSessionOrSwitching = !!manager.activeSessionId || isSpaceSwitching;
@@ -993,10 +1079,8 @@ export function useAppOrchestrator() {
     showSettings,
     setShowSettings,
 
-    // Space creator
-    spaceCreatorOpen,
-    setSpaceCreatorOpen,
-    editingSpace,
+    // Space management (draft = real space, deleted on cancel)
+    draftSpaceId,
 
     // Scroll navigation
     scrollToMessageId,
@@ -1029,10 +1113,11 @@ export function useAppOrchestrator() {
     handleImportCCSession,
     handleSeedDevExampleSpaceData,
     handleNavigateToMessage,
-    handleCreateSpace,
-    handleEditSpace,
+    handleStartCreateSpace,
+    handleConfirmCreateSpace,
+    handleCancelCreateSpace,
+    handleUpdateSpace,
     handleDeleteSpace,
-    handleSaveSpace,
     handleMoveProjectToSpace,
 
     // Folder & Pin management

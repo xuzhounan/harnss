@@ -33,13 +33,16 @@ function readBool(key: string, fallback: boolean): boolean {
 const IS_MAC_PLATFORM = typeof navigator !== "undefined"
   && /mac/i.test(navigator.platform);
 
-function readMacBackgroundEffect(): MacBackgroundEffect {
-  const stored = localStorage.getItem("harnss-mac-background-effect");
-  if (stored === "liquid-glass" || stored === "vibrancy" || stored === "off") {
-    return stored;
-  }
+type MacNativeBackgroundEffect = Exclude<MacBackgroundEffect, "off">;
 
-  return readBool("harnss-transparency", true) ? "liquid-glass" : "off";
+function readMacNativeBackgroundEffect(): MacNativeBackgroundEffect {
+  const stored = localStorage.getItem("harnss-mac-background-effect");
+  return stored === "vibrancy" ? "vibrancy" : "liquid-glass";
+}
+
+function persistMacBackgroundEffect(effect: MacNativeBackgroundEffect): void {
+  if (!IS_MAC_PLATFORM || typeof window === "undefined" || !window.claude?.settings) return;
+  void window.claude.settings.set({ macBackgroundEffect: effect });
 }
 
 /** Normalize an array of ratios to sum to 1.0, respecting a per-element minimum. */
@@ -331,33 +334,57 @@ export function useSettings(projectId: string | null, engine: EngineId = "claude
     localStorage.setItem("harnss-island-shine", String(enabled));
   }, []);
 
-  const [macBackgroundEffect, setMacBackgroundEffectRaw] = useState<MacBackgroundEffect>(() =>
-    readMacBackgroundEffect(),
+  const [macNativeBackgroundEffect, setMacNativeBackgroundEffectRaw] = useState<MacNativeBackgroundEffect>(() =>
+    readMacNativeBackgroundEffect(),
   );
   const [transparencyRaw, setTransparencyRaw] = useState(() =>
     readBool("harnss-transparency", true),
   );
-  const setMacBackgroundEffect = useCallback((effect: MacBackgroundEffect) => {
-    setMacBackgroundEffectRaw(effect);
-    localStorage.setItem("harnss-mac-background-effect", effect);
-    const enabled = effect !== "off";
-    setTransparencyRaw(enabled);
-    localStorage.setItem("harnss-transparency", String(enabled));
+  useEffect(() => {
+    if (!IS_MAC_PLATFORM || typeof window === "undefined" || !window.claude?.settings) return;
+    let cancelled = false;
+
+    window.claude.settings.get().then((appSettings) => {
+      if (cancelled) return;
+      const nextNativeEffect = appSettings?.macBackgroundEffect === "vibrancy"
+        ? "vibrancy"
+        : "liquid-glass";
+      setMacNativeBackgroundEffectRaw(nextNativeEffect);
+      localStorage.setItem("harnss-mac-background-effect", nextNativeEffect);
+    }).catch(() => {
+      // Keep the local renderer fallback when app settings are unavailable.
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
-  const transparency = IS_MAC_PLATFORM
-    ? macBackgroundEffect !== "off"
-    : transparencyRaw;
+
+  const macBackgroundEffect: MacBackgroundEffect = IS_MAC_PLATFORM
+    ? (transparencyRaw ? macNativeBackgroundEffect : "off")
+    : (transparencyRaw ? "liquid-glass" : "off");
+  const setMacBackgroundEffect = useCallback((effect: MacBackgroundEffect) => {
+    if (effect === "off") {
+      setTransparencyRaw(false);
+      localStorage.setItem("harnss-transparency", "false");
+      return;
+    }
+
+    setMacNativeBackgroundEffectRaw(effect);
+    localStorage.setItem("harnss-mac-background-effect", effect);
+    setTransparencyRaw(true);
+    localStorage.setItem("harnss-transparency", "true");
+    persistMacBackgroundEffect(effect);
+  }, []);
+  const transparency = transparencyRaw;
   const setTransparency = useCallback((enabled: boolean) => {
     setTransparencyRaw(enabled);
     localStorage.setItem("harnss-transparency", String(enabled));
-    if (IS_MAC_PLATFORM) {
-      const nextEffect = enabled
-        ? (macBackgroundEffect === "off" ? "liquid-glass" : macBackgroundEffect)
-        : "off";
-      setMacBackgroundEffectRaw(nextEffect);
-      localStorage.setItem("harnss-mac-background-effect", nextEffect);
+    if (IS_MAC_PLATFORM && enabled) {
+      localStorage.setItem("harnss-mac-background-effect", macNativeBackgroundEffect);
+      persistMacBackgroundEffect(macNativeBackgroundEffect);
     }
-  }, [macBackgroundEffect]);
+  }, [macNativeBackgroundEffect]);
 
   const [planMode, setPlanModeRaw] = useState(() => {
     const stored = localStorage.getItem("harnss-plan-mode");

@@ -31,6 +31,13 @@ function brightenLightLightness(value: number): number {
   return clamp01(value + (1 - value) * LIGHT_SURFACE_WHITE_MIX);
 }
 
+function bindNativeGlassTintOnFocus(tintColor: string | null): () => void {
+  const applyTint = () => window.claude.glass?.setTintColor(tintColor);
+  applyTint();
+  window.addEventListener("focus", applyTint);
+  return () => window.removeEventListener("focus", applyTint);
+}
+
 /**
  * Applies the active space's color tint to CSS custom properties on the document root.
  * Handles dark/light mode branching and glass/non-glass transparency.
@@ -61,8 +68,9 @@ export function useSpaceTheme(
       // Clear all tinted vars so the CSS base values take over
       for (const v of TINT_VARS) root.style.removeProperty(v);
       setGlassOverlayStyle(null);
-      // Clear native glass tint when space has no color
-      if (isNativeGlass) window.claude.glass?.setTintColor(null);
+      const releaseFocusTint = isNativeGlass
+        ? bindNativeGlassTintOnFocus(null)
+        : null;
 
       // Still apply opacity even for colorless (default) space
       const opacity = space?.color.opacity;
@@ -73,7 +81,11 @@ export function useSpaceTheme(
       } else {
         root.style.removeProperty("--island-fill");
       }
-      return;
+
+      return () => {
+        releaseFocusTint?.();
+        if (isNativeGlass) window.claude.glass?.setTintColor(null);
+      };
     }
 
     const { hue, chroma } = space.color;
@@ -149,11 +161,11 @@ export function useSpaceTheme(
     const overlayChroma = Math.min(0.18, 0.04 + 0.12 * tintStrength);
 
     // ── Glass tinting ──
+    let releaseFocusTint: (() => void) | null = null;
     if (isNativeGlass) {
       // Native macOS glass tinting via addView({ tintColor }).
-      // The main process also re-applies tint on window focus (macOS drops it when inactive).
       const hexTint = computeGlassTintColor(space.color);
-      window.claude.glass?.setTintColor(hexTint);
+      releaseFocusTint = bindNativeGlassTintOnFocus(hexTint);
       // Native tint handles the glass material — no CSS overlay needed
       setGlassOverlayStyle(null);
     } else if (isGlass) {
@@ -179,6 +191,7 @@ export function useSpaceTheme(
     }
 
     return () => {
+      releaseFocusTint?.();
       for (const v of TINT_VARS) root.style.removeProperty(v);
       setGlassOverlayStyle(null);
       if (isNativeGlass) window.claude.glass?.setTintColor(null);

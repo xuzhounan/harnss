@@ -52,6 +52,8 @@ export interface AppSettings {
   showDevFillInChatTitleBar: boolean;
   /** Show the Jira board UI in the sidebar and main panel (developer preview) */
   showJiraBoard: boolean;
+  /** Preferred native macOS background material when window transparency is enabled */
+  macBackgroundEffect: MacBackgroundEffect;
   /** Enable anonymous analytics to help improve the app (default: true) */
   analyticsEnabled: boolean;
   /** Anonymous user ID for analytics (auto-generated) */

@@ -326,7 +326,7 @@ export const AppearanceSettings = memo(function AppearanceSettings({
                 isMac
                   ? (
                     macLiquidGlassSupported
-                      ? "Choose the native macOS background material. Liquid Glass can be enabled immediately; switching away from it may need a quick reopen to fully clear the native view."
+                      ? "Choose the native macOS background material. Blur Off keeps the window opaque, while switching from Liquid Glass to Vibrancy needs a restart."
                       : "Choose the native macOS background material. Liquid Glass is unavailable on this Mac, so Vibrancy and Off are available."
                   )
                   : (

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import type { ToolId } from "@/components/ToolPicker";
 import {
   DEFAULT_PANE_DRAWER_HEIGHT,
@@ -11,6 +11,7 @@ import {
   type SplitAddRejectionReason,
   getSplitAddRejectionReason,
 } from "@/lib/split-layout";
+import { replaceVisibleSessionId } from "@/lib/split-view-state";
 
 export interface PaneDrawerState {
   open: boolean;
@@ -44,6 +45,7 @@ export interface SplitViewState {
   setFocusedSession: (sessionId: string | null) => void;
   setWidthFractions: (fractions: number[]) => void;
   requestAddSplitSession: (input: SplitAddSessionInput) => SplitAddSessionResult;
+  replaceSessionId: (previousSessionId: string, nextSessionId: string) => void;
   removeSplitSession: (sessionId: string) => void;
   dismissSplitView: () => void;
   toggleToolTab: (sessionId: string, toolId: ToolId) => void;
@@ -78,6 +80,26 @@ function omitDrawerState(
   for (const paneId of paneIdsToRemove) {
     delete nextDrawerStateByPaneId[paneId];
   }
+  return nextDrawerStateByPaneId;
+}
+
+function replaceDrawerStatePaneId(
+  drawerStateByPaneId: Record<string, PaneDrawerState>,
+  previousSessionId: string,
+  nextSessionId: string,
+): Record<string, PaneDrawerState> {
+  if (!(previousSessionId in drawerStateByPaneId) || previousSessionId === nextSessionId) {
+    return drawerStateByPaneId;
+  }
+
+  const nextDrawerStateByPaneId = { ...drawerStateByPaneId };
+  const previousDrawerState = nextDrawerStateByPaneId[previousSessionId];
+  delete nextDrawerStateByPaneId[previousSessionId];
+
+  if (!(nextSessionId in nextDrawerStateByPaneId)) {
+    nextDrawerStateByPaneId[nextSessionId] = previousDrawerState;
+  }
+
   return nextDrawerStateByPaneId;
 }
 
@@ -145,6 +167,37 @@ export function useSplitView(): SplitViewState {
 
     return { ok: true, reason: null };
   }, [visibleSessionIds]);
+
+  const replaceSessionIdInSplitView = useCallback((previousSessionId: string, nextSessionId: string) => {
+    const previousId = previousSessionId.trim();
+    const nextId = nextSessionId.trim();
+    if (!previousId || !nextId || previousId === nextId) {
+      return;
+    }
+
+    setVisibleSessionIds((currentVisibleSessionIds) => {
+      const nextVisibleSessionIds = replaceVisibleSessionId(currentVisibleSessionIds, previousId, nextId);
+      setDrawerStateByPaneId((currentDrawerStateByPaneId) =>
+        nextVisibleSessionIds.length > 1
+          ? replaceDrawerStatePaneId(currentDrawerStateByPaneId, previousId, nextId)
+          : {},
+      );
+      setFocusedSessionId((currentFocusedSessionId) =>
+        currentFocusedSessionId !== null && !nextVisibleSessionIds.includes(currentFocusedSessionId)
+          ? null
+          : currentFocusedSessionId === previousId
+            ? nextId
+            : currentFocusedSessionId,
+      );
+
+      if (nextVisibleSessionIds.length === currentVisibleSessionIds.length) {
+        return nextVisibleSessionIds;
+      }
+
+      setWidthFractionsState(nextVisibleSessionIds.length > 1 ? equalWidthFractions(nextVisibleSessionIds.length) : [1]);
+      return nextVisibleSessionIds;
+    });
+  }, []);
 
   const removeSplitSession = useCallback((sessionId: string) => {
     setVisibleSessionIds((currentVisibleSessionIds) => {
@@ -256,6 +309,7 @@ export function useSplitView(): SplitViewState {
     setFocusedSession,
     setWidthFractions,
     requestAddSplitSession,
+    replaceSessionId: replaceSessionIdInSplitView,
     removeSplitSession,
     dismissSplitView,
     toggleToolTab,

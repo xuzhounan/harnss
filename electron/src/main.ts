@@ -23,6 +23,7 @@ import { log } from "./lib/logger";
 import { reportError } from "./lib/error-utils";
 import { migrateFromOpenAcpUi } from "./lib/migration";
 import { glassEnabled, applyGlass, setGlassTint } from "./lib/glass";
+import { getAppSettings } from "./lib/app-settings";
 import { initAutoUpdater, getIsInstallingUpdate } from "./lib/updater";
 import { initPostHog, shutdownPostHog, reinitPostHog, captureEvent } from "./lib/posthog";
 import { sessions } from "./ipc/claude-sessions";
@@ -63,10 +64,9 @@ if (glassEnabled) {
 let mainWindow: BrowserWindow | null = null;
 
 type NativeThemeSource = "system" | "light" | "dark";
-type MacBackgroundEffect = "liquid-glass" | "vibrancy" | "off";
+type MacBackgroundEffect = "liquid-glass" | "vibrancy";
 
 let pendingMacBackgroundEffect: MacBackgroundEffect = "liquid-glass";
-let currentMacBackgroundEffect: MacBackgroundEffect = "off";
 
 function normalizeThemeSource(value: unknown): NativeThemeSource {
   return value === "light" || value === "dark" || value === "system"
@@ -75,9 +75,7 @@ function normalizeThemeSource(value: unknown): NativeThemeSource {
 }
 
 function normalizeMacBackgroundEffect(value: unknown): MacBackgroundEffect {
-  return value === "liquid-glass" || value === "vibrancy" || value === "off"
-    ? value
-    : "liquid-glass";
+  return value === "vibrancy" ? "vibrancy" : "liquid-glass";
 }
 
 function getMacBackgroundEffectSupport(): { liquidGlass: boolean; vibrancy: boolean } {
@@ -90,10 +88,7 @@ function getMacBackgroundEffectSupport(): { liquidGlass: boolean; vibrancy: bool
 function resolveMacBackgroundEffect(effect: MacBackgroundEffect): MacBackgroundEffect {
   const support = getMacBackgroundEffectSupport();
   if (effect === "liquid-glass" && !support.liquidGlass) {
-    return support.vibrancy ? "vibrancy" : "off";
-  }
-  if (effect === "vibrancy" && !support.vibrancy) {
-    return "off";
+    return "vibrancy";
   }
   return effect;
 }
@@ -106,28 +101,18 @@ function applyMacBackgroundEffect(effect: MacBackgroundEffect): void {
 
   if (resolved === "vibrancy") {
     mainWindow.setVibrancy("under-window", { animationDuration: 120 });
+    return;
+  }
+
+  mainWindow.setVibrancy(null);
+  if (!glassEnabled || mainWindow.webContents.isLoadingMainFrame()) return;
+
+  const glassId = applyGlass(mainWindow.getNativeWindowHandle());
+  if (glassId === -1) {
+    log("GLASS", "addView returned -1 — native addon failed, glass will not be visible");
   } else {
-    mainWindow.setVibrancy(null);
+    log("GLASS", `Liquid glass applied, viewId=${glassId}`);
   }
-
-  if (resolved === "liquid-glass") {
-    if (!glassEnabled) {
-      currentMacBackgroundEffect = "off";
-      return;
-    }
-    if (mainWindow.webContents.isLoadingMainFrame()) return;
-
-    const glassId = applyGlass(mainWindow.getNativeWindowHandle());
-    if (glassId === -1) {
-      log("GLASS", "addView returned -1 — native addon failed, glass will not be visible");
-    } else {
-      log("GLASS", `Liquid glass applied, viewId=${glassId}`);
-    }
-  } else if (currentMacBackgroundEffect === "liquid-glass" && resolved !== "liquid-glass") {
-    log("GLASS", "Switching away from liquid glass may require reopening the window to fully clear the native view");
-  }
-
-  currentMacBackgroundEffect = resolved;
 }
 
 function getMainWindow(): BrowserWindow | null {
@@ -139,6 +124,11 @@ function isMainRendererPermissionRequest(webContents: Electron.WebContents | nul
 }
 
 function createWindow(): void {
+  const initialMacBackgroundEffect: MacBackgroundEffect = resolveMacBackgroundEffect(pendingMacBackgroundEffect);
+  if (process.platform === "darwin") {
+    pendingMacBackgroundEffect = initialMacBackgroundEffect;
+  }
+
   const windowOptions: Electron.BrowserWindowConstructorOptions = {
     show: false,
     width: 1200,
@@ -162,6 +152,7 @@ function createWindow(): void {
   if (process.platform === "darwin") {
     windowOptions.titleBarStyle = "hidden";
     windowOptions.transparent = true;
+    windowOptions.backgroundColor = "#00000000";
     windowOptions.trafficLightPosition = { x: 19, y: 19 };
   } else if (process.platform === "win32") {
     // Windows: native Electron backgroundMaterial handles DWM mica/acrylic.
@@ -177,14 +168,10 @@ function createWindow(): void {
   }
 
   mainWindow = new BrowserWindow(windowOptions);
+  if (process.platform === "darwin") applyMacBackgroundEffect(initialMacBackgroundEffect);
 
   mainWindow.once("ready-to-show", () => {
     mainWindow?.show();
-    if (process.platform === "darwin") {
-      applyMacBackgroundEffect(pendingMacBackgroundEffect);
-      setTimeout(() => applyMacBackgroundEffect(pendingMacBackgroundEffect), 0);
-      setTimeout(() => applyMacBackgroundEffect(pendingMacBackgroundEffect), 120);
-    }
   });
 
   if (process.platform === "darwin") {
@@ -463,6 +450,11 @@ ipcMain.handle("speech:request-mic-permission", async () => {
 app.whenReady().then(() => {
   // Migrate data from old "OpenACP UI" app directory before anything reads it
   migrateFromOpenAcpUi();
+  if (process.platform === "darwin") {
+    pendingMacBackgroundEffect = resolveMacBackgroundEffect(
+      normalizeMacBackgroundEffect(getAppSettings().macBackgroundEffect),
+    );
+  }
 
   createWindow();
   initAutoUpdater(getMainWindow);

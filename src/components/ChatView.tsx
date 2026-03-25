@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useMemo, useCallback, useState, startTransition, memo } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useMemo, useCallback, useState, startTransition, memo, type PointerEvent as ReactPointerEvent } from "react";
 import { motion } from "motion/react";
 import { Loader2, Minus } from "lucide-react";
 import type { InstalledAgent, UIMessage } from "@/types";
@@ -22,7 +22,6 @@ import {
   isWithinBottomLockThreshold,
   shouldUnlockBottomLock,
 } from "@/lib/chat-scroll";
-import { CHAT_CONTENT_RESIZED_EVENT } from "@/lib/events";
 import { estimateRowHeight } from "@/lib/chat-virtualization";
 import { CHAT_ROW_CLASS } from "@/components/lib/chat-layout";
 
@@ -43,6 +42,7 @@ const PROCESSING_ROW: RowDescriptor = { kind: "processing" };
 const CHAT_TOP_PADDING_PX = 56;
 const CHAT_BOTTOM_PADDING_PX = 144;
 const CHAT_EXTRA_BOTTOM_PADDING_PX = 280;
+const CHAT_COMPOSER_CLEARANCE_PX = 24;
 // Progressive rendering: render bottom rows immediately, hydrate older rows in background
 const INITIAL_RENDER_ROWS = 20;
 const HYDRATION_BATCH_SIZE = 40;
@@ -374,6 +374,7 @@ function ChatViewContent({
 
   // ── Scroll state (refs, not state — rerender-use-ref-transient-values) ──
   const bottomLockedRef = useRef(true);
+  const [composerInset, setComposerInset] = useState(0);
 
   // ── Deferred mount: show spinner for one frame, then render content ──
   // Prevents UI freeze on session/space switch by deferring heavy work.
@@ -385,26 +386,18 @@ function ChatViewContent({
     return () => cancelAnimationFrame(frame);
   }, []);
 
-  // Scroll to bottom once content mounts (session-switch layoutEffect fires before
-  // the scroll container exists, so this catches the first real mount).
-  useLayoutEffect(() => {
-    if (!contentReady) return;
-    const el = scrollContainerRef.current;
-    if (el && bottomLockedRef.current) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [contentReady]);
-
   const userScrollIntentRef = useRef(0);
-  const lastRowCountRef = useRef(0);
   const scrollRafPending = useRef(false);
-  const followBottomRafRef = useRef<number | null>(null);
   const cachedRowsByKeyRef = useRef<Map<string, RowDescriptor>>(new Map());
   // Store callback in ref to avoid effect re-subscriptions (advanced-event-handler-refs)
   const onTopScrollProgressRef = useRef(onTopScrollProgress);
   onTopScrollProgressRef.current = onTopScrollProgress;
   const lastTopProgressRef = useRef(-1);
-  const bottomPadding = extraBottomPadding ? CHAT_EXTRA_BOTTOM_PADDING_PX : CHAT_BOTTOM_PADDING_PX;
+  const bottomPadding = useMemo(() => {
+    const fallbackPadding = extraBottomPadding ? CHAT_EXTRA_BOTTOM_PADDING_PX : CHAT_BOTTOM_PADDING_PX;
+    if (composerInset <= 0) return fallbackPadding;
+    return Math.max(fallbackPadding, composerInset + CHAT_COMPOSER_CLEARANCE_PX);
+  }, [composerInset, extraBottomPadding]);
 
   // ── Single-pass partition: queued vs non-queued (js-combine-iterations) ──
   const { nonQueuedMessages, queuedMessages } = useMemo(() => {
@@ -673,30 +666,18 @@ function ChatViewContent({
     }
   }, []);
 
-  const scheduleFollowBottom = useCallback(() => {
-    if (!bottomLockedRef.current) return;
-    if (followBottomRafRef.current !== null) return;
-    followBottomRafRef.current = requestAnimationFrame(() => {
-      followBottomRafRef.current = null;
-      const el = scrollContainerRef.current;
-      if (!el || !bottomLockedRef.current) return;
-      el.scrollTop = el.scrollHeight;
-      publishTopProgress(getTopScrollProgress(el.scrollTop));
-    });
+  const followBottomNow = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el || !bottomLockedRef.current) return;
+    el.scrollTop = el.scrollHeight;
+    publishTopProgress(getTopScrollProgress(el.scrollTop));
   }, [publishTopProgress]);
-
-  useEffect(() => {
-    return () => {
-      if (followBottomRafRef.current !== null) {
-        cancelAnimationFrame(followBottomRafRef.current);
-      }
-    };
-  }, []);
 
   // Keep user at bottom as hydration replaces spacer with real rows.
   // Only pin to bottom if the user has NEVER scrolled during this session.
   // userScrollIntentRef starts at 0 (reset on session switch) and is set to a
-  // positive timestamp on any wheel/touch/pointerDown. Checking > 0 means
+  // positive timestamp on wheel/touch gestures and direct scroll-container
+  // pointer interactions (for scrollbar drags). Checking > 0 means
   // "has ever scrolled" — unlike Date.now() <= ref which only covers 250ms.
   //
   // Once the user scrolls, content is added ABOVE their viewport. The browser
@@ -707,11 +688,56 @@ function ChatViewContent({
       bottomLockedRef.current = false;
       return;
     }
+    followBottomNow();
+  }, [effectiveHydratedFrom, followBottomNow]);
+
+  useLayoutEffect(() => {
+    if (!contentReady) return;
+    if (rows.length === 0) return;
+    followBottomNow();
+  }, [bottomPadding, contentReady, followBottomNow, rows.length]);
+
+  useLayoutEffect(() => {
+    if (!contentReady) return;
     const el = scrollContainerRef.current;
-    if (el) {
-      el.scrollTop = el.scrollHeight;
+    if (!el) return;
+
+    const composer = el.parentElement?.querySelector<HTMLElement>("[data-chat-composer]");
+    if (!composer) {
+      setComposerInset((prev) => (prev === 0 ? prev : 0));
+      return;
     }
-  }, [effectiveHydratedFrom]);
+
+    const updateComposerInset = () => {
+      const nextInset = Math.ceil(composer.getBoundingClientRect().height);
+      setComposerInset((prev) => (prev === nextInset ? prev : nextInset));
+    };
+
+    updateComposerInset();
+
+    const observer = new ResizeObserver(() => {
+      updateComposerInset();
+      followBottomNow();
+    });
+    observer.observe(composer);
+
+    return () => observer.disconnect();
+  }, [contentReady, followBottomNow]);
+
+  useLayoutEffect(() => {
+    if (!contentReady) return;
+    const el = scrollContainerRef.current;
+    const inner = el?.firstElementChild;
+    if (!el || !inner) return;
+
+    const observer = new ResizeObserver(() => {
+      followBottomNow();
+    });
+    observer.observe(el);
+    observer.observe(inner);
+
+    return () => observer.disconnect();
+  }, [contentReady, followBottomNow]);
 
   const handleScroll = useCallback(() => {
     if (scrollRafPending.current) return;
@@ -746,6 +772,11 @@ function ChatViewContent({
     userScrollIntentRef.current = Date.now() + USER_SCROLL_INTENT_WINDOW_MS;
   }, []);
 
+  const handlePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
+    markUserIntent();
+  }, [markUserIntent]);
+
   // ── Passive wheel/touch listeners (compositor-unblocking) ──
   // Must re-run when contentReady changes — on initial mount the scroll container
   // doesn't exist (spinner showing), so listeners aren't attached. When contentReady
@@ -761,64 +792,20 @@ function ChatViewContent({
     };
   }, [markUserIntent, contentReady]);
 
-  // ── Auto-follow on new messages ──
-  useEffect(() => {
-    if (rows.length === lastRowCountRef.current) return;
-    lastRowCountRef.current = rows.length;
-    if (rows.length > 0) scheduleFollowBottom();
-  }, [rows.length, scheduleFollowBottom]);
-
-  useEffect(() => {
-    if (rows.length > 0) scheduleFollowBottom();
-  }, [bottomPadding, rows.length, scheduleFollowBottom]);
-
-  // ── Auto-follow during streaming (content height grows without row count change) ──
-  useEffect(() => {
-    if (!isProcessing) return;
-    const el = scrollContainerRef.current;
-    if (!el) return;
-
-    const observer = new ResizeObserver(() => {
-      scheduleFollowBottom();
-    });
-
-    // Observe the inner content container for height changes
-    const inner = el.firstElementChild;
-    if (inner) observer.observe(inner);
-    return () => observer.disconnect();
-  }, [isProcessing, scheduleFollowBottom]);
-
   // ── Session switch — force scroll to bottom (rerender-dependencies — primitive dep) ──
   useLayoutEffect(() => {
     if (!sessionId) return;
     bottomLockedRef.current = true;
     userScrollIntentRef.current = 0;
     lastTopProgressRef.current = -1;
-    lastRowCountRef.current = 0;
     // Scroll immediately — useLayoutEffect fires before browser paints,
     // so setting scrollTop here prevents any visible flicker at scrollTop=0.
-    const el = scrollContainerRef.current;
-    if (el) {
-      el.scrollTop = el.scrollHeight;
-      publishTopProgress(getTopScrollProgress(el.scrollTop));
-      // Post-paint correction: child effects may change DOM heights after mount
-      requestAnimationFrame(() => {
-        if (bottomLockedRef.current && el) {
-          el.scrollTop = el.scrollHeight;
-        }
-      });
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
-
-  // ── Content resize (mermaid diagrams etc.) ──
-  useEffect(() => {
-    const handleContentResize = () => {
-      if (rows.length > 0) scheduleFollowBottom();
-    };
-    window.addEventListener(CHAT_CONTENT_RESIZED_EVENT, handleContentResize);
-    return () => window.removeEventListener(CHAT_CONTENT_RESIZED_EVENT, handleContentResize);
-  }, [rows.length, scheduleFollowBottom]);
+    followBottomNow();
+    // Post-paint correction: child effects may change DOM heights after mount
+    requestAnimationFrame(() => {
+      followBottomNow();
+    });
+  }, [followBottomNow, sessionId]);
 
   // ── Scroll-to-message (search navigation) ──
   useEffect(() => {
@@ -871,7 +858,7 @@ function ChatViewContent({
         className="min-h-0 flex-1 overflow-y-auto"
         style={{ overscrollBehaviorY: "contain" }}
         onScroll={handleScroll}
-        onPointerDown={markUserIntent}
+        onPointerDown={handlePointerDown}
       >
         <div style={{ paddingTop: `${CHAT_TOP_PADDING_PX}px`, paddingBottom: `${bottomPadding}px` }}>
           {/* Single spacer for all unhydrated rows — 1 div instead of hundreds */}

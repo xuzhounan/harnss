@@ -45,7 +45,6 @@ import { flattenConfigOptions } from "@/lib/acp-utils";
 import { BOTTOM_CHAT_MAX_WIDTH_CLASS } from "@/lib/layout-constants";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { resolveModelValue } from "@/lib/model-utils";
-import { isMac } from "@/lib/utils";
 import { AgentIcon } from "@/components/AgentIcon";
 import { ImageAnnotationEditor } from "@/components/ImageAnnotationEditor";
 import { ENGINE_ICONS, getAgentIcon } from "@/lib/engine-icons";
@@ -105,18 +104,20 @@ function PermissionDropdown({
   permissionMode,
   onPermissionModeChange,
   showDetails,
+  disabled,
 }: {
   permissionMode: string;
   onPermissionModeChange: (mode: string) => void;
   /** When true, shows policy + description (Codex style) */
   showDetails?: boolean;
+  disabled?: boolean;
 }) {
   const selectedMode =
     PERMISSION_MODES.find((m) => m.id === permissionMode) ?? PERMISSION_MODES[0];
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="xs" className={TOOLBAR_BTN}>
+        <Button variant="ghost" size="xs" className={TOOLBAR_BTN} disabled={disabled}>
           <Shield className="size-3" />
           {selectedMode.label}
           <ChevronDown className="size-3" />
@@ -155,9 +156,11 @@ function PermissionDropdown({
 function PlanModeToggle({
   planMode,
   onPlanModeChange,
+  disabled,
 }: {
   planMode: boolean;
   onPlanModeChange: (enabled: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
     <Tooltip>
@@ -165,6 +168,7 @@ function PlanModeToggle({
         <Button
           variant="ghost"
           size="xs"
+          disabled={disabled}
           onClick={() => onPlanModeChange(!planMode)}
           className={`rounded-lg font-normal ${
             planMode
@@ -190,6 +194,7 @@ function EngineControls({
   isCodexAgent,
   isACPAgent,
   isProcessing,
+  disabled,
   permissionMode,
   onPermissionModeChange,
   planMode,
@@ -200,6 +205,7 @@ function EngineControls({
   isCodexAgent: boolean;
   isACPAgent: boolean;
   isProcessing: boolean;
+  disabled?: boolean;
   permissionMode: string;
   onPermissionModeChange: (mode: string) => void;
   planMode: boolean;
@@ -212,7 +218,7 @@ function EngineControls({
     return (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="xs" className={TOOLBAR_BTN} disabled={isProcessing}>
+          <Button variant="ghost" size="xs" className={TOOLBAR_BTN} disabled={isProcessing || disabled}>
             <Shield className="size-3" />
             {ACP_PERMISSION_BEHAVIORS.find(b => b.id === acpPermissionBehavior)?.label ?? "Ask"}
             <ChevronDown className="size-3" />
@@ -238,11 +244,12 @@ function EngineControls({
 
   return (
     <>
-      <PlanModeToggle planMode={planMode} onPlanModeChange={onPlanModeChange} />
+      <PlanModeToggle planMode={planMode} onPlanModeChange={onPlanModeChange} disabled={disabled} />
       <PermissionDropdown
         permissionMode={permissionMode}
         onPermissionModeChange={onPermissionModeChange}
         showDetails={isCodexAgent}
+        disabled={disabled}
       />
     </>
   );
@@ -331,6 +338,8 @@ interface InputBarProps {
   onRemoveGrabbedElement?: (id: string) => void;
   /** Controls width profile for island vs flat layout */
   isIslandLayout?: boolean;
+  /** Secondary split panes should not mutate active-session controls. */
+  controlsReadOnly?: boolean;
 }
 
 export const LOCAL_CLEAR_COMMAND: SlashCommand = {
@@ -557,6 +566,7 @@ export const InputBar = memo(function InputBar({
   queuedCount = 0,
   grabbedElements,
   onRemoveGrabbedElement,
+  controlsReadOnly = false,
 }: InputBarProps) {
   const [hasContent, setHasContent] = useState(false);
   const [showMentions, setShowMentions] = useState(false);
@@ -876,7 +886,7 @@ export const InputBar = memo(function InputBar({
 
     const { text: fullText, mentionPaths, deepMentionPaths } = extractEditableContent(el);
     const trimmed = fullText.trim();
-    const hasGrabs = grabbedElements && grabbedElements.length > 0;
+    const hasGrabs = (grabbedElements?.length ?? 0) > 0;
     if (isAwaitingAcpOptions || (!trimmed && attachments.length === 0 && !hasGrabs) || isSending) return;
 
     if (isClearCommandText(trimmed)) {
@@ -1509,7 +1519,7 @@ export const InputBar = memo(function InputBar({
             {/* Engine picker — always visible, includes agent switching + model/config submenus */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="xs" className={TOOLBAR_BTN} disabled={isProcessing}>
+                <Button variant="ghost" size="xs" className={TOOLBAR_BTN} disabled={isProcessing || controlsReadOnly}>
                   <AgentIcon
                     icon={selectedAgent ? getAgentIcon(selectedAgent) : ENGINE_ICONS.claude}
                     size={14}
@@ -1733,6 +1743,7 @@ export const InputBar = memo(function InputBar({
               isCodexAgent={isCodexAgent}
               isACPAgent={isACPAgent}
               isProcessing={isProcessing}
+              disabled={controlsReadOnly}
               permissionMode={permissionMode}
               onPermissionModeChange={onPermissionModeChange}
               planMode={planMode}
@@ -1744,7 +1755,7 @@ export const InputBar = memo(function InputBar({
 
           {/* Right controls — always visible, never shrink */}
           <div className="flex shrink-0 items-center gap-2">
-            {contextUsage && (() => {
+            {contextUsage && contextUsage.contextWindow > 0 && (() => {
               const totalInput = contextUsage.inputTokens + contextUsage.cacheReadTokens + contextUsage.cacheCreationTokens;
               const percent = Math.min(100, (totalInput / contextUsage.contextWindow) * 100);
               const radius = 8;

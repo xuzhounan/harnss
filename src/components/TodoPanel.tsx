@@ -47,24 +47,24 @@ export function TodoPanel({ todos }: TodoPanelProps) {
             return (
               <div
                 key={i}
-                className={`flex items-start gap-1.5 rounded-md px-1.5 py-[3px] transition-colors ${
+                className={`flex items-start gap-2 rounded-md px-2 py-1 transition-colors ${
                   isActive ? "bg-blue-500/[0.04]" : ""
                 }`}
               >
                 {/* Status icon */}
                 <div className="mt-[2px] shrink-0">
                   {isDone ? (
-                    <CheckCircle2 className="h-3 w-3 text-emerald-500/60" />
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500/60" />
                   ) : isActive ? (
-                    <Loader2 className="h-3 w-3 text-blue-400/70 animate-spin" />
+                    <Loader2 className="h-3.5 w-3.5 text-blue-400/70 animate-spin" />
                   ) : (
-                    <Circle className="h-3 w-3 text-foreground/15" />
+                    <Circle className="h-3.5 w-3.5 text-foreground/15" />
                   )}
                 </div>
 
                 {/* Task text */}
                 <span
-                  className={`text-[11px] leading-snug ${
+                  className={`text-[13px] leading-snug ${
                     isDone
                       ? "text-foreground/35 line-through decoration-foreground/15"
                       : isActive

@@ -238,7 +238,7 @@ declare global {
         branches: (cwd: string) => Promise<GitBranch[] | { error: string }>;
         checkout: (cwd: string, branch: string) => Promise<{ ok?: boolean; error?: string }>;
         createBranch: (cwd: string, name: string) => Promise<{ ok?: boolean; error?: string }>;
-        createWorktree: (cwd: string, path: string, branch: string, fromRef?: string) => Promise<{ ok?: boolean; path?: string; output?: string; error?: string }>;
+        createWorktree: (cwd: string, path: string, branch: string, fromRef?: string) => Promise<{ ok?: boolean; path?: string; output?: string; error?: string; setupResults?: Array<{ command: string; ok: boolean; output?: string; error?: string }> }>;
         removeWorktree: (cwd: string, path: string, force?: boolean) => Promise<{ ok?: boolean; output?: string; error?: string }>;
         pruneWorktrees: (cwd: string) => Promise<{ ok?: boolean; output?: string; error?: string }>;
         push: (cwd: string) => Promise<{ ok?: boolean; output?: string; error?: string }>;

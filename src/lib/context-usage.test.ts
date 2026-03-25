@@ -65,6 +65,29 @@ describe("extractAssistantContextUsage", () => {
 
     expect(extractAssistantContextUsage(message, 200_000)).toBeNull();
   });
+
+  it("keeps assistant token usage without fabricating a context window", () => {
+    const message: AssistantMessageEvent["message"] = {
+      model: "claude-opus-4-6[1m]",
+      id: "msg-1",
+      role: "assistant",
+      content: [],
+      usage: {
+        input_tokens: 1200,
+        output_tokens: 300,
+        cache_read_input_tokens: 80,
+        cache_creation_input_tokens: 20,
+      },
+    };
+
+    expect(extractAssistantContextUsage(message, null)).toEqual({
+      inputTokens: 1200,
+      outputTokens: 300,
+      cacheReadTokens: 80,
+      cacheCreationTokens: 20,
+      contextWindow: 0,
+    });
+  });
 });
 
 describe("background context usage tracking", () => {
@@ -97,7 +120,7 @@ describe("background context usage tracking", () => {
       outputTokens: 250,
       cacheReadTokens: 40,
       cacheCreationTokens: 10,
-      contextWindow: 200_000,
+      contextWindow: 0,
     });
 
     const resultEvent = {
@@ -125,7 +148,13 @@ describe("background context usage tracking", () => {
 
     handleClaudeEvent(state, resultEvent);
 
-    expect(state.contextUsage?.contextWindow).toBe(1_000_000);
+    expect(state.contextUsage).toEqual({
+      inputTokens: 1500,
+      outputTokens: 250,
+      cacheReadTokens: 40,
+      cacheCreationTokens: 10,
+      contextWindow: 1_000_000,
+    });
   });
 
   it("updates ACP background state from usage_update events", () => {

@@ -46,7 +46,7 @@ export function extractThinkingContent(blocks: ContentBlock[]): string {
 /** Normalize Claude assistant message usage into the shared context meter shape. */
 export function extractAssistantContextUsage(
   message: AssistantMessageEvent["message"],
-  previousContextWindow: number,
+  previousContextWindow?: number | null,
 ): ContextUsage | null {
   const usage = message.usage;
   if (!usage) return null;
@@ -55,7 +55,7 @@ export function extractAssistantContextUsage(
     outputTokens: usage.output_tokens ?? 0,
     cacheReadTokens: usage.cache_read_input_tokens ?? 0,
     cacheCreationTokens: usage.cache_creation_input_tokens ?? 0,
-    contextWindow: previousContextWindow,
+    contextWindow: previousContextWindow ?? 0,
   };
 }
 

@@ -27,16 +27,6 @@ function readStoredThemeSource(storage: PreloadStorage | undefined): ThemeSource
     : "dark";
 }
 
-function readStoredMacBackgroundEffect(storage: PreloadStorage | undefined): MacBackgroundEffect {
-  const stored = storage?.getItem("harnss-mac-background-effect");
-  if (stored === "liquid-glass" || stored === "vibrancy" || stored === "off") {
-    return stored;
-  }
-
-  const transparencySetting = storage?.getItem("harnss-transparency") ?? null;
-  return transparencySetting === "false" ? "off" : "liquid-glass";
-}
-
 // Early setup wrapped in try/catch so contextBridge.exposeInMainWorld always runs
 // even if DOM isn't ready or something else fails above it.
 try {
@@ -48,18 +38,10 @@ try {
   // On Windows, glass support does not mean the user has transparency enabled.
   root?.classList.add(`platform-${process.platform}`);
   ipcRenderer.send("app:set-theme-source", themeSource);
-  const transparencyEnabled = process.platform === "darwin"
-    ? readStoredMacBackgroundEffect(globals.localStorage) !== "off"
-    : (globals.localStorage?.getItem("harnss-transparency") ?? null) !== "false";
+  const transparencyEnabled = (globals.localStorage?.getItem("harnss-transparency") ?? null) !== "false";
   const canUseTransparentWindow = process.platform === "darwin" || process.platform === "win32";
   if (canUseTransparentWindow && transparencyEnabled) {
     root?.classList.add("glass-enabled");
-  }
-  if (process.platform === "darwin") {
-    ipcRenderer.send(
-      "app:set-mac-background-effect",
-      readStoredMacBackgroundEffect(globals.localStorage),
-    );
   }
 
   // Push stored theme to main process early so glass appearance is correct

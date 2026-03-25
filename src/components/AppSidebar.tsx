@@ -1,12 +1,19 @@
 import { useState, useEffect, useMemo, useRef, useCallback, memo } from "react";
-import { Bug, PanelLeft, Plus } from "lucide-react";
+import { Bug, PanelLeft, Plus, Paintbrush } from "lucide-react";
 import { isMac } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import type { ChatFolder, ChatSession, InstalledAgent, Project, Space } from "@/types";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import type { ChatFolder, ChatSession, InstalledAgent, Project, Space, SpaceColor } from "@/types";
 import { APP_SIDEBAR_WIDTH } from "@/lib/layout-constants";
 import { SidebarSearch } from "./SidebarSearch";
-import { SpaceBar } from "./SpaceBar";
+import { SpaceBar, SpaceIcon } from "./SpaceBar";
+import { SpaceCustomizer } from "./SpaceCustomizer";
 import { UpdateBanner } from "./UpdateBanner";
 import { ProjectSection } from "./sidebar/ProjectSection";
 
@@ -44,13 +51,17 @@ interface AppSidebarProps {
   spaces: Space[];
   activeSpaceId: string;
   onSelectSpace: (id: string) => void;
-  onCreateSpace: () => void;
-  onEditSpace: (space: Space) => void;
+  onStartCreateSpace: () => void;
+  onUpdateSpace: (id: string, updates: Partial<Pick<Space, "name" | "icon" | "iconType" | "color">>) => void;
   onDeleteSpace: (id: string) => void;
   onOpenSettings: () => void;
   agents?: InstalledAgent[];
   onOpenInSplitView?: (sessionId: string) => void;
   canOpenSessionInSplitView?: (sessionId: string) => boolean;
+  // Draft space creation (draftSpaceId is a real space ID; null when not drafting)
+  draftSpaceId: string | null;
+  onConfirmCreateSpace: () => void;
+  onCancelCreateSpace: () => void;
 }
 
 export const AppSidebar = memo(function AppSidebar({
@@ -87,14 +98,35 @@ export const AppSidebar = memo(function AppSidebar({
   spaces,
   activeSpaceId,
   onSelectSpace,
-  onCreateSpace,
-  onEditSpace,
+  onStartCreateSpace,
+  onUpdateSpace,
   onDeleteSpace,
   onOpenSettings,
   agents,
   onOpenInSplitView,
   canOpenSessionInSplitView,
+  draftSpaceId,
+  onConfirmCreateSpace,
+  onCancelCreateSpace,
 }: AppSidebarProps) {
+  const isCreating = draftSpaceId !== null;
+  // The draft is a real space — find it in the spaces array
+  const draftSpace = isCreating ? spaces.find((s) => s.id === draftSpaceId) ?? null : null;
+
+  // Slide animation when entering/leaving draft creation mode
+  const prevIsCreatingRef = useRef(isCreating);
+  const [draftSlideClass, setDraftSlideClass] = useState("");
+
+  useEffect(() => {
+    if (prevIsCreatingRef.current === isCreating) return;
+    prevIsCreatingRef.current = isCreating;
+
+    // Entering creation → slide from right, exiting → slide from left
+    setDraftSlideClass(isCreating ? "space-slide-from-right" : "space-slide-from-left");
+    const timer = setTimeout(() => setDraftSlideClass(""), 250);
+    return () => clearTimeout(timer);
+  }, [isCreating]);
+
   // Load default chat limit from main-process settings
   const [defaultChatLimit, setDefaultChatLimit] = useState(10);
   useEffect(() => {
@@ -113,7 +145,7 @@ export const AppSidebar = memo(function AppSidebar({
           setDefaultChatLimit((prev) => s.defaultChatLimit !== prev ? s.defaultChatLimit! : prev);
         }
       });
-    }, 5000); // Poll every 5s — lightweight since it's a small JSON read
+    }, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -151,7 +183,7 @@ export const AppSidebar = memo(function AppSidebar({
     return () => clearTimeout(timer);
   }, [activeSpaceId, spaces]);
 
-  // Scroll fade: hide top/bottom fade when at the edge
+  // Scroll fade
   const scrollRef = useRef<HTMLDivElement>(null);
   const [fadeTop, setFadeTop] = useState(false);
   const [fadeBottom, setFadeBottom] = useState(false);
@@ -173,7 +205,6 @@ export const AppSidebar = memo(function AppSidebar({
     if (!viewport) return;
     viewport.addEventListener("scroll", updateFade, { passive: true });
 
-    // ResizeObserver catches initial content render + any size changes
     const ro = new ResizeObserver(updateFade);
     ro.observe(viewport);
     if (viewport.firstElementChild) ro.observe(viewport.firstElementChild);
@@ -184,7 +215,6 @@ export const AppSidebar = memo(function AppSidebar({
     };
   }, [updateFade]);
 
-  // Recheck fade when projects/space change (content size changes)
   useEffect(() => {
     updateFade();
   }, [filteredProjects, activeSpaceId, updateFade]);
@@ -194,6 +224,20 @@ export const AppSidebar = memo(function AppSidebar({
     ? "black calc(100% - 48px), rgba(0,0,0,0.35) calc(100% - 26px), rgba(0,0,0,0.07) calc(100% - 10px), transparent 100%"
     : "black 100%";
   const maskValue = `linear-gradient(to bottom, ${maskTop}, ${maskBottom})`;
+
+  const handleDraftIconUpdate = useCallback(
+    (icon: string, iconType: "emoji" | "lucide") => {
+      if (draftSpaceId) onUpdateSpace(draftSpaceId, { icon, iconType });
+    },
+    [draftSpaceId, onUpdateSpace],
+  );
+
+  const handleDraftColorUpdate = useCallback(
+    (color: SpaceColor) => {
+      if (draftSpaceId) onUpdateSpace(draftSpaceId, { color });
+    },
+    [draftSpaceId, onUpdateSpace],
+  );
 
   return (
     <div
@@ -216,115 +260,202 @@ export const AppSidebar = memo(function AppSidebar({
 
         <div className="flex-1" />
 
-        <button
-          onClick={onCreateProject}
-          className="no-drag flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium text-sidebar-foreground/70 transition-all hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
-        >
-          <Plus className="h-3.5 w-3.5 shrink-0" />
-          <span>Add project</span>
-        </button>
+        {!isCreating && (
+          <button
+            onClick={onCreateProject}
+            className="no-drag flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium text-sidebar-foreground/70 transition-all hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
+          >
+            <Plus className="h-3.5 w-3.5 shrink-0" />
+            <span>Add project</span>
+          </button>
+        )}
       </div>
 
-      <SidebarSearch
-        projectIds={projectIds}
-        onNavigateToMessage={onNavigateToMessage}
-        onSelectSession={onSelectSession}
-      />
+      {isCreating && draftSpace ? (
+        /* ── Draft space creation UI (replaces project list) ── */
+        <div className={`flex min-h-0 flex-1 flex-col ${draftSlideClass}`}>
+          <div className="flex flex-1 flex-col items-center px-5 pt-6">
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-sidebar-accent/50">
+              <SpaceIcon space={draftSpace} size={36} />
+            </div>
 
-      <div
-        className="min-h-0 flex-1"
-        style={{ maskImage: maskValue, WebkitMaskImage: maskValue }}
-      >
-        <ScrollArea ref={scrollRef} className="h-full">
-          <div className={`px-3 pt-2 pb-8 ${slideClass}`}>
-            {filteredProjects.map((project) => {
-              const projectSessions = sessions.filter(
-                (s) => s.projectId === project.id,
-              );
-              const projectFolders = foldersByProject[project.id] ?? [];
+            <h2 className="mt-4 text-base font-semibold text-sidebar-foreground">
+              Create a Space
+            </h2>
+            <p className="mt-1 text-center text-xs text-sidebar-foreground/50 leading-relaxed">
+              Separate your projects for work, life, and more.
+            </p>
 
-              return (
-                <ProjectSection
-                  key={project.id}
-                  islandLayout={islandLayout}
-                  project={project}
-                  sessions={projectSessions}
-                  folders={projectFolders}
-                  activeSessionId={activeSessionId}
-                  jiraBoardEnabled={jiraBoardEnabled}
-                  isJiraBoardOpen={jiraBoardProjectId === project.id}
-                  organizeByChatBranch={organizeByChatBranch}
-                  onNewChat={() => onNewChat(project.id)}
-                  onToggleJiraBoard={() => onToggleProjectJiraBoard(project.id)}
-                  onSelectSession={onSelectSession}
-                  onDeleteSession={onDeleteSession}
-                  onRenameSession={onRenameSession}
-                  onDeleteProject={() => onDeleteProject(project.id)}
-                  onRenameProject={(name) => onRenameProject(project.id, name)}
-                  onUpdateIcon={(icon, iconType) =>
-                    onUpdateProjectIcon(project.id, icon, iconType)
-                  }
-                  onImportCCSession={(ccSessionId) =>
-                    onImportCCSession(project.id, ccSessionId)
-                  }
-                  otherSpaces={otherSpaces}
-                  onMoveToSpace={(spaceId) =>
-                    onMoveProjectToSpace(project.id, spaceId)
-                  }
-                  onReorderProject={(targetId) =>
-                    onReorderProject(project.id, targetId)
-                  }
-                  defaultChatLimit={defaultChatLimit}
-                  onPinSession={onPinSession}
-                  onMoveSessionToFolder={onMoveSessionToFolder}
-                  onCreateFolder={() => onCreateFolder(project.id)}
-                  onRenameFolder={onRenameFolder}
-                  onDeleteFolder={onDeleteFolder}
-                  onPinFolder={onPinFolder}
-                  onSetOrganizeByChatBranch={onSetOrganizeByChatBranch}
-                  agents={agents}
-                  onOpenInSplitView={onOpenInSplitView}
-                  canOpenSessionInSplitView={canOpenSessionInSplitView}
+            {/* Name input */}
+            <div className="mt-5 w-full">
+              <div className="relative">
+                <Plus className="absolute start-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-sidebar-foreground/30" />
+                <Input
+                  value={draftSpace.name}
+                  onChange={(e) => {
+                    if (draftSpaceId) onUpdateSpace(draftSpaceId, { name: e.target.value });
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && draftSpace.name.trim()) onConfirmCreateSpace();
+                    if (e.key === "Escape") onCancelCreateSpace();
+                  }}
+                  placeholder="Space name..."
+                  className="h-9 ps-8 text-sm bg-sidebar-accent/40 border-sidebar-border"
+                  autoFocus
                 />
-              );
-            })}
+              </div>
+            </div>
 
-            {filteredProjects.length === 0 && (
-              <p className="px-2 py-8 text-center text-xs text-sidebar-foreground/50">
-                {projects.length === 0
-                  ? "Add a project to get started"
-                  : "No projects in this space"}
-              </p>
-            )}
+            {/* Choose a Theme button — opens SpaceCustomizer in a popover */}
+            <Popover>
+              <PopoverTrigger asChild>
+                <button className="mt-3 flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-start text-sm font-medium text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent/60">
+                  <Paintbrush className="h-4 w-4 text-sidebar-foreground/40" />
+                  Choose a Theme
+                </button>
+              </PopoverTrigger>
+              <PopoverContent
+                side="right"
+                sideOffset={12}
+                align="start"
+                className="w-72"
+                onOpenAutoFocus={(e) => e.preventDefault()}
+              >
+                <SpaceCustomizer
+                  icon={draftSpace.icon}
+                  iconType={draftSpace.iconType}
+                  color={draftSpace.color}
+                  onUpdateIcon={handleDraftIconUpdate}
+                  onUpdateColor={handleDraftColorUpdate}
+                />
+              </PopoverContent>
+            </Popover>
           </div>
-        </ScrollArea>
-      </div>
 
-      <UpdateBanner />
+          {/* Create / Cancel at bottom */}
+          <div className="shrink-0 px-4 pb-3 pt-2 space-y-1.5">
+            <Button
+              className="w-full"
+              size="sm"
+              onClick={onConfirmCreateSpace}
+              disabled={!draftSpace.name.trim()}
+            >
+              Create Space
+            </Button>
+            <button
+              onClick={onCancelCreateSpace}
+              className="w-full py-1.5 text-center text-sm text-sidebar-foreground/50 hover:text-sidebar-foreground transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        /* ── Normal sidebar content ── */
+        <div className={`flex min-h-0 flex-1 flex-col ${draftSlideClass}`}>
+          <SidebarSearch
+            projectIds={projectIds}
+            onNavigateToMessage={onNavigateToMessage}
+            onSelectSession={onSelectSession}
+          />
 
-      <div className="flex items-center justify-center gap-1.5 px-3 py-1.5 text-[11px] text-sidebar-foreground/40">
-        <span>Harnss is in early beta</span>
-        <span className="text-sidebar-foreground/20">·</span>
-        <a
-          href="https://github.com/OpenSource03/harnss/issues"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-sidebar-foreground/50 transition-colors hover:text-sidebar-foreground/80"
-        >
-          <Bug className="h-3 w-3" />
-          <span>Report a bug</span>
-        </a>
-      </div>
+          <div
+            className="min-h-0 flex-1"
+            style={{ maskImage: maskValue, WebkitMaskImage: maskValue }}
+          >
+            <ScrollArea ref={scrollRef} className="h-full">
+              <div className={`px-3 pt-2 pb-8 ${slideClass}`}>
+                {filteredProjects.map((project) => {
+                  const projectSessions = sessions.filter(
+                    (s) => s.projectId === project.id,
+                  );
+                  const projectFolders = foldersByProject[project.id] ?? [];
+
+                  return (
+                    <ProjectSection
+                      key={project.id}
+                      islandLayout={islandLayout}
+                      project={project}
+                      sessions={projectSessions}
+                      folders={projectFolders}
+                      activeSessionId={activeSessionId}
+                      jiraBoardEnabled={jiraBoardEnabled}
+                      isJiraBoardOpen={jiraBoardProjectId === project.id}
+                      organizeByChatBranch={organizeByChatBranch}
+                      onNewChat={() => onNewChat(project.id)}
+                      onToggleJiraBoard={() => onToggleProjectJiraBoard(project.id)}
+                      onSelectSession={onSelectSession}
+                      onDeleteSession={onDeleteSession}
+                      onRenameSession={onRenameSession}
+                      onDeleteProject={() => onDeleteProject(project.id)}
+                      onRenameProject={(name) => onRenameProject(project.id, name)}
+                      onUpdateIcon={(icon, iconType) =>
+                        onUpdateProjectIcon(project.id, icon, iconType)
+                      }
+                      onImportCCSession={(ccSessionId) =>
+                        onImportCCSession(project.id, ccSessionId)
+                      }
+                      otherSpaces={otherSpaces}
+                      onMoveToSpace={(spaceId) =>
+                        onMoveProjectToSpace(project.id, spaceId)
+                      }
+                      onReorderProject={(targetId) =>
+                        onReorderProject(project.id, targetId)
+                      }
+                      defaultChatLimit={defaultChatLimit}
+                      onPinSession={onPinSession}
+                      onMoveSessionToFolder={onMoveSessionToFolder}
+                      onCreateFolder={() => onCreateFolder(project.id)}
+                      onRenameFolder={onRenameFolder}
+                      onDeleteFolder={onDeleteFolder}
+                      onPinFolder={onPinFolder}
+                      onSetOrganizeByChatBranch={onSetOrganizeByChatBranch}
+                      agents={agents}
+                      onOpenInSplitView={onOpenInSplitView}
+                      canOpenSessionInSplitView={canOpenSessionInSplitView}
+                    />
+                  );
+                })}
+
+                {filteredProjects.length === 0 && (
+                  <p className="px-2 py-8 text-center text-xs text-sidebar-foreground/50">
+                    {projects.length === 0
+                      ? "Add a project to get started"
+                      : "No projects in this space"}
+                  </p>
+                )}
+              </div>
+            </ScrollArea>
+          </div>
+
+          <UpdateBanner />
+
+          <div className="flex items-center justify-center gap-1.5 px-3 py-1.5 text-[11px] text-sidebar-foreground/40">
+            <span>Harnss is in early beta</span>
+            <span className="text-sidebar-foreground/20">·</span>
+            <a
+              href="https://github.com/OpenSource03/harnss/issues"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-sidebar-foreground/50 transition-colors hover:text-sidebar-foreground/80"
+            >
+              <Bug className="h-3 w-3" />
+              <span>Report a bug</span>
+            </a>
+          </div>
+        </div>
+      )}
 
       <SpaceBar
         spaces={spaces}
         activeSpaceId={activeSpaceId}
         onSelectSpace={onSelectSpace}
-        onCreateSpace={onCreateSpace}
-        onEditSpace={onEditSpace}
+        onStartCreateSpace={onStartCreateSpace}
+        onUpdateSpace={onUpdateSpace}
         onDeleteSpace={onDeleteSpace}
         onDropProject={onMoveProjectToSpace}
         onOpenSettings={onOpenSettings}
+        draftSpace={draftSpace}
       />
     </div>
   );

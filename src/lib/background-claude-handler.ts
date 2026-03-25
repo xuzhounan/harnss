@@ -240,7 +240,7 @@ export function handleClaudeEvent(
       state.contextUsage =
         extractAssistantContextUsage(
           evt.message,
-          state.contextUsage?.contextWindow ?? 200_000,
+          state.contextUsage?.contextWindow,
         ) ?? state.contextUsage;
       const textContent = extractTextContent(evt.message.content);
       const thinkingContent = extractThinkingContent(evt.message.content);

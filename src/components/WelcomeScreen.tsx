@@ -1,6 +1,13 @@
-import { memo, useEffect, useRef, useState, type RefObject } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { ArrowRight, FolderOpen } from "lucide-react";
+import {
+  getContinueMessage,
+  getNextContinueMessageDelay,
+  shouldRefreshContinueMessage,
+  type ContinueMessage,
+} from "@/lib/welcome-screen";
+import { projectSidebarArrowX } from "@/lib/welcome-screen-arrow";
 
 // ── Constants ─────────────────────────────────────────────────────────
 
@@ -8,112 +15,12 @@ const EASE_OUT: [number, number, number, number] = [0.22, 0.68, 0, 1];
 const DISPLAY_FONT = "'Instrument Serif', Georgia, serif";
 const SIDEBAR_ARROW_HEIGHT = 360;
 const SIDEBAR_ARROW_TIP_INSET = 18;
+const SIDEBAR_ARROW_RIGHT_INSET = 24;
 const SIDEBAR_ARROW_BASE_SPAN = 642;
+const SIDEBAR_ARROW_MAX_OFFSET = 772;
 const SIDEBAR_ARROW_TAIL_GAP = 36;
 const SIDEBAR_ARROW_HEAD_LENGTH = 34;
 const SIDEBAR_ARROW_HEAD_SPREAD = 19;
-
-type TimeBucket = "lateNight" | "morning" | "afternoon" | "evening";
-
-interface ContinueMessage {
-  headline: string;
-  subtitle: string;
-  accent: string;
-}
-
-const ANYTIME_CONTINUE_MESSAGES: readonly ContinueMessage[] = [
-  {
-    headline: "Continue building",
-    subtitle: "Your threads are warm. Pick one and keep shipping.",
-    accent: "oklch(0.62 0.18 185)",
-  },
-  {
-    headline: "Welcome back",
-    subtitle: "The repo missed you for several whole seconds.",
-    accent: "oklch(0.66 0.16 32)",
-  },
-  {
-    headline: "Back at it, menace",
-    subtitle: "Choose a thread and apply tasteful chaos.",
-    accent: "oklch(0.7 0.17 145)",
-  },
-  {
-    headline: "One more tiny change",
-    subtitle: "Famous last words. Your threads are waiting.",
-    accent: "oklch(0.72 0.14 260)",
-  },
-];
-
-const TIME_AWARE_CONTINUE_MESSAGES: Record<TimeBucket, readonly ContinueMessage[]> = {
-  lateNight: [
-    {
-      headline: "Hello, night owl",
-      subtitle: "Your best ideas and worst commit messages happen now.",
-      accent: "oklch(0.7 0.15 250)",
-    },
-    {
-      headline: "Midnight debug club",
-      subtitle: "The stack trace is glowing gently in the dark.",
-      accent: "oklch(0.68 0.18 290)",
-    },
-    {
-      headline: "Moonlight merge pending",
-      subtitle: "Pick up where you left off before the birds clock in.",
-      accent: "oklch(0.74 0.13 215)",
-    },
-  ],
-  morning: [
-    {
-      headline: "Good morning, builder",
-      subtitle: "Fresh tab, fresh coffee, same huge TODO list.",
-      accent: "oklch(0.76 0.16 78)",
-    },
-    {
-      headline: "Rise and refactor",
-      subtitle: "Your threads are awake before some of your teammates.",
-      accent: "oklch(0.73 0.17 110)",
-    },
-    {
-      headline: "Morning commit energy",
-      subtitle: "Start with the easy win before the meetings find you.",
-      accent: "oklch(0.78 0.15 48)",
-    },
-  ],
-  afternoon: [
-    {
-      headline: "Welcome back, sunshine",
-      subtitle: "Prime hour for turning half-finished ideas into features.",
-      accent: "oklch(0.74 0.18 58)",
-    },
-    {
-      headline: "Afternoon sprint mode",
-      subtitle: "The code is warm and your threads are lined up.",
-      accent: "oklch(0.68 0.19 28)",
-    },
-    {
-      headline: "Post-lunch patch attack",
-      subtitle: "Pick a thread and make the roadmap more believable.",
-      accent: "oklch(0.75 0.16 135)",
-    },
-  ],
-  evening: [
-    {
-      headline: "Evening shift engaged",
-      subtitle: "Quiet hours. Strong focus. Mild gremlin energy.",
-      accent: "oklch(0.67 0.17 15)",
-    },
-    {
-      headline: "Twilight build session",
-      subtitle: "A nice time to ship something clever and unnecessary.",
-      accent: "oklch(0.69 0.18 335)",
-    },
-    {
-      headline: "Welcome back after hours",
-      subtitle: "Your threads are ready for that definitely quick check-in.",
-      accent: "oklch(0.72 0.15 210)",
-    },
-  ],
-};
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -126,55 +33,6 @@ function rotateVector(x: number, y: number, radians: number) {
     x: x * cos - y * sin,
     y: x * sin + y * cos,
   };
-}
-
-function getTimeBucket(date: Date): TimeBucket {
-  const hour = date.getHours();
-  if (hour < 5) {
-    return "lateNight";
-  }
-  if (hour < 12) {
-    return "morning";
-  }
-  if (hour < 18) {
-    return "afternoon";
-  }
-  return "evening";
-}
-
-function pickRandomMessage(
-  messages: readonly ContinueMessage[],
-  previous?: ContinueMessage,
-): ContinueMessage {
-  if (messages.length === 1) {
-    return messages[0];
-  }
-
-  let nextMessage = messages[Math.floor(Math.random() * messages.length)];
-  if (!previous) {
-    return nextMessage;
-  }
-
-  let attempts = 0;
-  while (
-    attempts < 6 &&
-    nextMessage.headline === previous.headline &&
-    nextMessage.subtitle === previous.subtitle
-  ) {
-    nextMessage = messages[Math.floor(Math.random() * messages.length)];
-    attempts += 1;
-  }
-
-  return nextMessage;
-}
-
-function getContinueMessage(previous?: ContinueMessage): ContinueMessage {
-  const now = new Date();
-  const bucket = getTimeBucket(now);
-  return pickRandomMessage(
-    [...TIME_AWARE_CONTINUE_MESSAGES[bucket], ...ANYTIME_CONTINUE_MESSAGES],
-    previous,
-  );
 }
 
 // ── Ambient Background ───────────────────────────────────────────────
@@ -229,23 +87,22 @@ function GrainOverlay() {
  *  tip can sit on the sidebar boundary while the tail starts beneath the
  *  centered caption. */
 interface SidebarArrowProps {
-  anchorRef: RefObject<HTMLElement | null>;
+  anchorElement: HTMLElement | null;
 }
 
-function SidebarArrow({ anchorRef }: SidebarArrowProps) {
+function SidebarArrow({ anchorElement }: SidebarArrowProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [metrics, setMetrics] = useState({ svgWidth: 900, tailX: 660 });
 
   useEffect(() => {
     const container = containerRef.current;
-    const anchor = anchorRef.current;
-    if (!container || !anchor) {
+    if (!container || !anchorElement) {
       return;
     }
 
     const updateMetrics = () => {
       const containerRect = container.getBoundingClientRect();
-      const anchorRect = anchor.getBoundingClientRect();
+      const anchorRect = anchorElement.getBoundingClientRect();
       const nextWidth = Math.max(containerRect.width, 1);
       const maxTailX = Math.max(nextWidth - 24, SIDEBAR_ARROW_TIP_INSET + 120);
       const minTailX = Math.min(660, maxTailX);
@@ -270,7 +127,7 @@ function SidebarArrow({ anchorRef }: SidebarArrowProps) {
     });
 
     observer.observe(container);
-    observer.observe(anchor);
+    observer.observe(anchorElement);
 
     const fontReady = document.fonts?.ready;
     if (fontReady) {
@@ -279,18 +136,37 @@ function SidebarArrow({ anchorRef }: SidebarArrowProps) {
       });
     }
 
+    const handleVisibilityOrFocus = () => {
+      if (!document.hidden) {
+        updateMetrics();
+      }
+    };
+
     window.addEventListener("resize", updateMetrics);
+    window.addEventListener("focus", handleVisibilityOrFocus);
+    document.addEventListener("visibilitychange", handleVisibilityOrFocus);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", updateMetrics);
+      window.removeEventListener("focus", handleVisibilityOrFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityOrFocus);
     };
-  }, [anchorRef]);
+  }, [anchorElement]);
 
   const usableWidth = Math.max(metrics.svgWidth, 1);
   const tipX = SIDEBAR_ARROW_TIP_INSET;
   const tailX = metrics.tailX;
   const span = Math.max(tailX - tipX, 1);
-  const scaleX = (offset: number) => tipX + (offset / SIDEBAR_ARROW_BASE_SPAN) * span;
+  const scaleX = (offset: number) =>
+    projectSidebarArrowX({
+      offset,
+      tipX,
+      tailX,
+      usableWidth,
+      baseSpan: SIDEBAR_ARROW_BASE_SPAN,
+      maxOffset: SIDEBAR_ARROW_MAX_OFFSET,
+      rightInset: SIDEBAR_ARROW_RIGHT_INSET,
+    });
   const endPoint = { x: tipX, y: 18 };
   const endControlPoint = { x: scaleX(92), y: 136 };
 
@@ -402,10 +278,11 @@ export const WelcomeScreen = memo(function WelcomeScreen({
   hasProjects,
   onCreateProject,
 }: WelcomeScreenProps) {
-  const subtitleRef = useRef<HTMLParagraphElement | null>(null);
+  const [subtitleElement, setSubtitleElement] = useState<HTMLParagraphElement | null>(null);
   const [continueMessage, setContinueMessage] = useState<ContinueMessage>(() =>
     getContinueMessage(),
   );
+  const lastRefreshAtRef = useRef(new Date());
 
   useEffect(() => {
     if (!hasProjects) {
@@ -414,29 +291,34 @@ export const WelcomeScreen = memo(function WelcomeScreen({
 
     let refreshTimer: number | null = null;
 
+    function refreshMessage(now: Date) {
+      lastRefreshAtRef.current = now;
+      setContinueMessage((previous) => getContinueMessage(previous, now));
+    }
+
     function queueNextRefresh() {
-      const now = new Date();
-      const nextHour = new Date(now);
-      nextHour.setHours(now.getHours() + 1, 0, 0, 0);
-      const delay = Math.max(nextHour.getTime() - now.getTime(), 60_000);
+      const delay = getNextContinueMessageDelay();
       refreshTimer = window.setTimeout(() => {
-        setContinueMessage((previous) => getContinueMessage(previous));
+        refreshMessage(new Date());
         queueNextRefresh();
       }, delay);
     }
 
-    function rerollMessage() {
+    function handleVisibilityChange() {
+      if (document.hidden) {
+        return;
+      }
+
+      const now = new Date();
+      if (!shouldRefreshContinueMessage(lastRefreshAtRef.current, now)) {
+        return;
+      }
+
       if (refreshTimer !== null) {
         window.clearTimeout(refreshTimer);
       }
-      setContinueMessage((previous) => getContinueMessage(previous));
+      refreshMessage(now);
       queueNextRefresh();
-    }
-
-    function handleVisibilityChange() {
-      if (!document.hidden) {
-        rerollMessage();
-      }
     }
 
     queueNextRefresh();
@@ -501,7 +383,7 @@ export const WelcomeScreen = memo(function WelcomeScreen({
   return (
     <div className="relative flex flex-1 flex-col overflow-hidden">
       {/* Hand-drawn arrow from center to sidebar edge */}
-      <SidebarArrow anchorRef={subtitleRef} />
+      <SidebarArrow anchorElement={subtitleElement} />
 
       {/* Central content */}
       <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-6">
@@ -530,7 +412,7 @@ export const WelcomeScreen = memo(function WelcomeScreen({
             </motion.h1>
             <motion.p
               key={continueMessage.subtitle}
-              ref={subtitleRef}
+              ref={setSubtitleElement}
               className="max-w-[min(92vw,640px)] text-center text-base leading-relaxed text-muted-foreground"
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
