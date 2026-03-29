@@ -12,9 +12,6 @@ import { useAgentRegistry } from "@/hooks/useAgentRegistry";
 import { useAcpAgentAutoUpdate } from "@/hooks/useAcpAgentAutoUpdate";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useSplitView } from "@/hooks/useSplitView";
-import {
-  APP_SIDEBAR_WIDTH,
-} from "@/lib/layout-constants";
 import { getAppMinimumWidth } from "@/lib/split-layout";
 import { resolveModelValue } from "@/lib/model-utils";
 import { getStoredProjectGitCwd, resolveProjectForSpace } from "@/lib/space-projects";
@@ -705,6 +702,15 @@ export function useAppOrchestrator() {
       settings.setModelForEngine(sessionEngine, syncedModel);
     }
   }, [manager.activeSessionId, manager.isDraft, manager.sessions, manager.supportedModels, settings.getModelForEngine, settings.setModelForEngine]);
+
+  useEffect(() => {
+    if (!manager.activeSessionId || manager.isDraft) return;
+    const session = manager.sessions.find((s) => s.id === manager.activeSessionId);
+    if (!session || (session.engine ?? "claude") !== "claude" || !session.effort) return;
+    if (session.effort !== settings.claudeEffort) {
+      settings.setClaudeEffort(session.effort);
+    }
+  }, [manager.activeSessionId, manager.isDraft, manager.sessions, settings.claudeEffort, settings.setClaudeEffort]);
 
   // Sync selectedAgent when switching to a different session
   useEffect(() => {

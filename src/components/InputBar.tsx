@@ -255,7 +255,7 @@ function EngineControls({
   );
 }
 
-const CLAUDE_EFFORT_DESCRIPTIONS: Record<ClaudeEffort, string> = {
+const CLAUDE_EFFORT_DESCRIPTIONS: Record<string, string> = {
   low: "Minimal thinking, fastest responses",
   medium: "Moderate thinking",
   high: "Deep reasoning",
@@ -338,8 +338,6 @@ interface InputBarProps {
   onRemoveGrabbedElement?: (id: string) => void;
   /** Controls width profile for island vs flat layout */
   isIslandLayout?: boolean;
-  /** Secondary split panes should not mutate active-session controls. */
-  controlsReadOnly?: boolean;
 }
 
 export const LOCAL_CLEAR_COMMAND: SlashCommand = {
@@ -566,7 +564,6 @@ export const InputBar = memo(function InputBar({
   queuedCount = 0,
   grabbedElements,
   onRemoveGrabbedElement,
-  controlsReadOnly = false,
 }: InputBarProps) {
   const [hasContent, setHasContent] = useState(false);
   const [showMentions, setShowMentions] = useState(false);
@@ -625,7 +622,11 @@ export const InputBar = memo(function InputBar({
     : "Loading models…";
   const resolvedModelId = resolveModelValue(model, supportedModels ?? []);
   const preferredModelId = resolvedModelId ?? model;
-  const selectedModel = modelList.find((m) => m.id === preferredModelId) ?? modelList[0];
+  const selectedModel = modelList.find((m) => m.id === preferredModelId) ?? (
+    preferredModelId
+      ? { id: preferredModelId, label: preferredModelId, description: "" }
+      : modelList[0]
+  );
   const selectedModelId = selectedModel?.id ?? preferredModelId;
   const claudeCurrentModel = supportedModels?.find((m) => m.value === selectedModelId);
   const claudeEffortOptions = claudeCurrentModel?.supportsEffort
@@ -639,7 +640,12 @@ export const InputBar = memo(function InputBar({
   const codexCurrentModel = codexModelData?.find((m) => m.id === selectedModelId)
     ?? codexModelData?.find((m) => m.isDefault)
     ?? codexModelData?.[0];
-  const codexEffortOptions = codexCurrentModel?.supportedReasoningEfforts ?? [];
+  const supportedModelCodexEfforts = supportedModels
+    ?.find((m) => m.value === selectedModelId)
+    ?.supportedEffortLevels
+    ?.map((effort) => ({ reasoningEffort: effort, description: "" }))
+    ?? [];
+  const codexEffortOptions = codexCurrentModel?.supportedReasoningEfforts ?? supportedModelCodexEfforts;
   const codexActiveEffort = codexEffortOptions.some((opt) => opt.reasoningEffort === codexEffort)
     ? codexEffort
     : codexCurrentModel?.defaultReasoningEffort ?? codexEffort ?? "medium";
@@ -1519,7 +1525,7 @@ export const InputBar = memo(function InputBar({
             {/* Engine picker — always visible, includes agent switching + model/config submenus */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="xs" className={TOOLBAR_BTN} disabled={isProcessing || controlsReadOnly}>
+                <Button variant="ghost" size="xs" className={TOOLBAR_BTN} disabled={isProcessing}>
                   <AgentIcon
                     icon={selectedAgent ? getAgentIcon(selectedAgent) : ENGINE_ICONS.claude}
                     size={14}
@@ -1583,7 +1589,9 @@ export const InputBar = memo(function InputBar({
                                   <span className="capitalize">{effort}</span>
                                   {effort === claudeActiveEffort && <span className="text-[10px] text-muted-foreground">Current</span>}
                                 </div>
-                                <div className="text-[10px] text-muted-foreground">{CLAUDE_EFFORT_DESCRIPTIONS[effort]}</div>
+                                <div className="text-[10px] text-muted-foreground">
+                                  {CLAUDE_EFFORT_DESCRIPTIONS[effort] ?? "Custom reasoning effort"}
+                                </div>
                               </div>
                             </DropdownMenuItem>
                           ))}
@@ -1743,7 +1751,6 @@ export const InputBar = memo(function InputBar({
               isCodexAgent={isCodexAgent}
               isACPAgent={isACPAgent}
               isProcessing={isProcessing}
-              disabled={controlsReadOnly}
               permissionMode={permissionMode}
               onPermissionModeChange={onPermissionModeChange}
               planMode={planMode}

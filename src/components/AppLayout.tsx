@@ -38,6 +38,7 @@ import { ProjectFilesPanel } from "./ProjectFilesPanel";
 import { FilePreviewOverlay } from "./FilePreviewOverlay";
 import { SettingsView } from "./SettingsView";
 import { CodexAuthDialog } from "./CodexAuthDialog";
+import { ACPAuthDialog } from "./ACPAuthDialog";
 import { JiraBoardPanel } from "./JiraBoardPanel";
 import type { JiraIssue } from "@shared/types/jira";
 import { isMac, isWindows } from "@/lib/utils";
@@ -45,12 +46,14 @@ import { SplitHandle } from "./split/SplitHandle";
 import { SplitDropZone } from "./split/SplitDropZone";
 import { PaneToolDrawer } from "./split/PaneToolDrawer";
 import { SplitPaneHost } from "./split/SplitPaneHost";
-import { buildCodexCollabMode } from "@/hooks/session/types";
+import { buildCodexCollabMode, DEFAULT_PERMISSION_MODE, DRAFT_ID, type CodexModelSummary } from "@/hooks/session/types";
 import { usePaneResize } from "@/hooks/usePaneResize";
 import { useSplitDragDrop } from "@/hooks/useSplitDragDrop";
 import { MIN_CHAT_WIDTH_SPLIT, SPLIT_HANDLE_WIDTH } from "@/lib/layout-constants";
 import { getMaxVisibleSplitPaneCount } from "@/lib/split-layout";
+import { findEquivalentModel } from "@/lib/model-utils";
 import { getStoredProjectGitCwd } from "@/lib/space-projects";
+import type { InstalledAgent, ModelInfo } from "@/types";
 
 const JIRA_BOARD_BY_SPACE_KEY = "harnss-jira-board-by-space";
 
@@ -63,6 +66,46 @@ function readJiraBoardBySpace(): Record<string, string> {
   } catch {
     return {};
   }
+}
+
+function buildPaneModelFallback(model: string | undefined): ModelInfo[] {
+  if (!model?.trim()) {
+    return [];
+  }
+
+  return [{
+    value: model,
+    displayName: model,
+    description: "",
+  }];
+}
+
+function buildCodexModelCatalog(rawModels: CodexModelSummary[]): ModelInfo[] {
+  return rawModels.map((model) => ({
+    value: model.id,
+    displayName: model.displayName,
+    description: model.description,
+    supportsEffort: model.supportedReasoningEfforts.length > 0,
+    supportedEffortLevels: model.supportedReasoningEfforts.map((entry) => entry.reasoningEffort),
+  }));
+}
+
+function ensureCurrentClaudeModel(
+  models: ModelInfo[],
+  currentModel: string | undefined,
+): ModelInfo[] {
+  const normalizedModel = currentModel?.trim();
+  if (!normalizedModel) return models;
+  if (findEquivalentModel(normalizedModel, models)) return models;
+
+  return [
+    ...models,
+    {
+      value: normalizedModel,
+      displayName: normalizedModel,
+      description: "",
+    },
+  ];
 }
 
 export function AppLayout() {
@@ -165,6 +208,12 @@ export function AppLayout() {
     ? projectManager.projects.find((project) => project.id === jiraBoardProjectId) ?? null
     : null;
   const [pendingJiraTask, setPendingJiraTask] = useState<{ projectId: string; message: string } | null>(null);
+  const [pendingSplitPaneSend, setPendingSplitPaneSend] = useState<{
+    sessionId: string;
+    text: string;
+    images?: Parameters<typeof handleSend>[1];
+    displayText?: string;
+  } | null>(null);
 
   const setJiraBoardProjectForSpace = useCallback((spaceId: string, projectId: string | null) => {
     setJiraBoardBySpace((prev) => {
@@ -299,6 +348,16 @@ Link: ${issue.url}`;
   }, [activeProjectId, handleSend, manager.activeSessionId, pendingJiraTask]);
 
   useEffect(() => {
+    if (!pendingSplitPaneSend) return;
+    if (manager.activeSessionId !== pendingSplitPaneSend.sessionId) return;
+
+    const nextSend = pendingSplitPaneSend;
+    setPendingSplitPaneSend(null);
+
+    void manager.send(nextSend.text, nextSend.images, nextSend.displayText);
+  }, [manager.activeSessionId, manager.send, pendingSplitPaneSend]);
+
+  useEffect(() => {
     if (jiraBoardEnabled) return;
     setJiraBoardBySpace((prev) => {
       if (Object.keys(prev).length === 0) return prev;
@@ -372,6 +431,34 @@ Link: ${issue.url}`;
   const isSplitActive = splitView.enabled;
   const splitPaneSessionIds = splitView.visibleSessionIds;
   const previousActiveSplitSessionIdRef = useRef<string | null>(manager.activeSessionId);
+
+  const queueSplitPaneSendAfterSwitch = useCallback(
+    async (sessionId: string, text: string, images?: Parameters<typeof handleSend>[1], displayText?: string) => {
+      setPendingSplitPaneSend({ sessionId, text, images, displayText });
+      await manager.switchSession(sessionId);
+    },
+    [manager.switchSession],
+  );
+
+  const createSplitPaneDraftSession = useCallback(
+    async (replacedSessionId: string, projectId: string, agent: InstalledAgent | null) => {
+      const wantedEngine = agent?.engine ?? "claude";
+      const wantedModel = settings.getModelForEngine(wantedEngine) || undefined;
+      await manager.createSession(projectId, {
+        model: wantedModel,
+        permissionMode: settings.permissionMode,
+        planMode: settings.planMode,
+        thinkingEnabled: settings.thinking,
+        effort: wantedEngine === "claude" ? settings.claudeEffort : undefined,
+        engine: wantedEngine,
+        agentId: agent?.id ?? "claude-code",
+        cachedConfigOptions: agent?.cachedConfigOptions,
+      });
+      splitView.replaceSessionId(replacedSessionId, DRAFT_ID);
+      splitView.setFocusedSession(DRAFT_ID);
+    },
+    [manager.createSession, settings, splitView],
+  );
 
   // ── Drag-and-drop from sidebar ──
   const visibleSessionIds = useMemo(() => {
@@ -627,6 +714,228 @@ Link: ${issue.url}`;
     } as React.CSSProperties;
   }, [getPreviewPaneMetrics, singlePanePreviewPosition]);
 
+  const buildPaneController = useCallback((
+    sessionId: string,
+    session: typeof manager.activeSession,
+    paneState: typeof manager.primaryPane,
+    isActiveSessionPane: boolean,
+  ) => {
+    const paneEngine = session?.engine
+      ?? (isActiveSessionPane ? (manager.activeSession?.engine ?? selectedAgent?.engine ?? "claude") : "claude");
+    const selectedPaneAgent = isActiveSessionPane
+      ? selectedAgent
+      : session?.agentId
+        ? agents.find((agent) => agent.id === session.agentId) ?? null
+        : session?.engine === "codex"
+          ? agents.find((agent) => agent.engine === "codex") ?? null
+          : null;
+    const liveModel = paneState.sessionInfo?.model?.trim();
+    const persistedModel = session?.model?.trim();
+    const defaultModel = isActiveSessionPane
+      ? settings.getModelForEngine(paneEngine).trim()
+      : "";
+    const paneModel = liveModel || persistedModel || defaultModel;
+    const panePermissionMode =
+      paneState.sessionInfo?.permissionMode
+      ?? session?.permissionMode
+      ?? (isActiveSessionPane ? settings.permissionMode : DEFAULT_PERMISSION_MODE);
+    const panePlanMode = panePermissionMode === "plan"
+      || !!session?.planMode
+      || (isActiveSessionPane && !session ? settings.planMode : false);
+    const paneSupportedModels = paneEngine === "acp"
+      ? []
+      : paneEngine === "codex"
+        ? (paneState.codex.codexModels.length > 0
+          ? paneState.codex.codexModels
+          : manager.codexRawModels.length > 0
+            ? buildCodexModelCatalog(manager.codexRawModels)
+            : buildPaneModelFallback(paneModel))
+        : ensureCurrentClaudeModel(
+          paneState.claude.supportedModels.length > 0
+            ? paneState.claude.supportedModels
+            : manager.cachedClaudeModels.length > 0
+              ? manager.cachedClaudeModels
+              : buildPaneModelFallback(paneModel),
+          paneModel,
+        );
+    const paneAcpConfigOptions = paneEngine === "acp"
+      ? (isActiveSessionPane ? manager.acpConfigOptions : paneState.acp.configOptions)
+      : [];
+    const paneAcpConfigOptionsLoading = paneEngine === "acp"
+      ? (isActiveSessionPane ? manager.acpConfigOptionsLoading : paneState.acp.configOptionsLoading)
+      : false;
+    const paneCodexModelsLoadingMessage = paneEngine === "codex" && paneSupportedModels.length === 0
+      ? manager.codexModelsLoadingMessage
+      : null;
+
+    const handlePaneModelChange = (nextModel: string) => {
+      if (isActiveSessionPane) {
+        handleModelChange(nextModel);
+        return;
+      }
+      void manager.setSessionModel(sessionId, nextModel);
+    };
+
+    const handlePaneClaudeModelEffortChange = (nextModel: string, effort: Parameters<typeof handleClaudeModelEffortChange>[1]) => {
+      if (isActiveSessionPane) {
+        handleClaudeModelEffortChange(nextModel, effort);
+        return;
+      }
+      void manager.setSessionClaudeModelAndEffort(sessionId, nextModel, effort);
+    };
+
+    const handlePanePlanModeChange = (enabled: boolean) => {
+      if (isActiveSessionPane) {
+        handlePlanModeChange(enabled);
+        return;
+      }
+      void manager.setSessionPlanMode(sessionId, enabled);
+    };
+
+    const handlePanePermissionModeChange = (nextMode: string) => {
+      if (isActiveSessionPane) {
+        handlePermissionModeChange(nextMode);
+        return;
+      }
+      void manager.setSessionPermissionMode(sessionId, nextMode);
+    };
+
+    const handlePaneCodexEffortChange = (effort: string) => {
+      if (isActiveSessionPane) {
+        manager.setCodexEffort(effort);
+        return;
+      }
+      paneState.codex.setCodexEffort(effort);
+    };
+
+    const handlePaneAgentChange = async (agent: InstalledAgent | null) => {
+      if (isActiveSessionPane) {
+        handleAgentChange(agent);
+        return;
+      }
+
+      if (!session) return;
+
+      const currentEngine = session.engine ?? "claude";
+      const currentAgentId = session.agentId;
+      const wantedEngine = agent?.engine ?? "claude";
+      const wantedAgentId = agent?.id;
+      const needsNewSession =
+        currentEngine !== wantedEngine
+        || (currentEngine === "acp" && wantedEngine === "acp" && currentAgentId !== wantedAgentId);
+
+      if (!needsNewSession) {
+        splitView.setFocusedSession(sessionId);
+        return;
+      }
+
+      await createSplitPaneDraftSession(sessionId, session.projectId, agent);
+    };
+
+    const handlePaneClear = async () => {
+      if (!session) return;
+      if (isActiveSessionPane) {
+        await handleComposerClear();
+        return;
+      }
+      await createSplitPaneDraftSession(sessionId, session.projectId, selectedPaneAgent);
+    };
+
+    const handlePaneSend = async (text: string, images?: Parameters<typeof handleSend>[1], displayText?: string) => {
+      splitView.setFocusedSession(sessionId);
+
+      if (isActiveSessionPane) {
+        await wrappedHandleSend(text, images, displayText);
+        return;
+      }
+
+      if (!session) {
+        return;
+      }
+
+      if (!paneState.isConnected) {
+        await queueSplitPaneSendAfterSwitch(sessionId, text, images, displayText);
+        return;
+      }
+
+      if (paneEngine === "acp") {
+        await paneState.acp.send(text, images, displayText);
+        return;
+      }
+
+      if (paneEngine === "codex") {
+        try {
+          const collaborationMode = buildCodexCollabMode(panePlanMode, paneModel);
+          const sent = await paneState.codex.send(text, images, displayText, collaborationMode);
+          if (!sent) {
+            await queueSplitPaneSendAfterSwitch(sessionId, text, images, displayText);
+          }
+        } catch (err) {
+          toast.error("Failed to send message", {
+            description: err instanceof Error ? err.message : String(err),
+          });
+        }
+        return;
+      }
+
+      const sent = await paneState.claude.send(text, images, displayText);
+      if (!sent) {
+        await queueSplitPaneSendAfterSwitch(sessionId, text, images, displayText);
+      }
+    };
+
+    const handlePaneStop = async () => {
+      splitView.setFocusedSession(sessionId);
+      if (isActiveSessionPane) {
+        await handleStop();
+        return;
+      }
+      await paneState.engine.interrupt();
+    };
+
+    return {
+      paneEngine,
+      selectedPaneAgent,
+      paneModel,
+      paneHeaderModel: liveModel || paneModel,
+      panePermissionMode,
+      panePlanMode,
+      paneSupportedModels,
+      paneClaudeEffort: session?.effort ?? settings.claudeEffort,
+      paneSlashCommands: paneState.engine.slashCommands,
+      paneAcpConfigOptions,
+      paneAcpConfigOptionsLoading,
+      paneCodexModelsLoadingMessage,
+      paneCodexEffort: isActiveSessionPane ? manager.codexEffort : paneState.codex.codexEffort,
+      handlePaneModelChange,
+      handlePaneClaudeModelEffortChange,
+      handlePanePlanModeChange,
+      handlePanePermissionModeChange,
+      handlePaneCodexEffortChange,
+      handlePaneAgentChange,
+      handlePaneClear,
+      handlePaneSend,
+      handlePaneStop,
+      handlePaneAcpConfigChange: isActiveSessionPane ? manager.setACPConfig : paneState.acp.setConfig,
+    };
+  }, [
+    agents,
+    createSplitPaneDraftSession,
+    handleAgentChange,
+    handleClaudeModelEffortChange,
+    handleComposerClear,
+    handleModelChange,
+    handlePermissionModeChange,
+    handlePlanModeChange,
+    handleStop,
+    manager,
+    queueSplitPaneSendAfterSwitch,
+    selectedAgent,
+    settings,
+    splitView,
+    wrappedHandleSend,
+  ]);
+
   const renderSplitPane = useCallback((
     sessionId: string,
     session: typeof manager.activeSession,
@@ -644,66 +953,12 @@ Link: ${issue.url}`;
       ? (getStoredProjectGitCwd(paneProject.id) ?? paneProject.path)
       : activeProjectPath;
     const paneProjectRoot = paneProject?.path;
-    const selectedPaneAgent = isActiveSessionPane
-      ? selectedAgent
-      : session?.agentId
-        ? agents.find((agent) => agent.id === session.agentId) ?? null
-        : session?.engine === "codex"
-          ? agents.find((agent) => agent.engine === "codex") ?? null
-          : null;
-    const handlePaneSend = async (text: string, images?: Parameters<typeof handleSend>[1], displayText?: string) => {
-      splitView.setFocusedSession(sessionId);
-
-      if (isActiveSessionPane) {
-        await wrappedHandleSend(text, images, displayText);
-        return;
-      }
-
-      if (!session) {
-        return;
-      }
-
-      if (!paneState.isConnected) {
-        await manager.switchSession(sessionId);
-        await manager.send(text, images, displayText);
-        return;
-      }
-
-      if (session.engine === "acp") {
-        await paneState.acp.send(text, images, displayText);
-        return;
-      }
-
-      if (session.engine === "codex") {
-        try {
-          const collaborationMode = buildCodexCollabMode(session.planMode, session.model);
-          const sent = await paneState.codex.send(text, images, displayText, collaborationMode);
-          if (!sent) {
-            await manager.switchSession(sessionId);
-            await manager.send(text, images, displayText);
-          }
-        } catch (err) {
-          toast.error("Failed to send message", {
-            description: err instanceof Error ? err.message : String(err),
-          });
-        }
-        return;
-      }
-
-      const sent = await paneState.claude.send(text, images, displayText);
-      if (!sent) {
-        await manager.switchSession(sessionId);
-        await manager.send(text, images, displayText);
-      }
-    };
-    const handlePaneStop = async () => {
-      splitView.setFocusedSession(sessionId);
-      if (isActiveSessionPane) {
-        await handleStop();
-        return;
-      }
-      await paneState.engine.interrupt();
-    };
+    const paneController = buildPaneController(
+      sessionId,
+      session,
+      paneState,
+      isActiveSessionPane,
+    );
 
     return (
       <motion.div
@@ -740,14 +995,14 @@ Link: ${issue.url}`;
               sidebarOpen={displayIndex === 0 ? sidebar.isOpen : false}
               showSidebarToggle={displayIndex === 0}
               isProcessing={paneState.isProcessing}
-              model={paneState.sessionInfo?.model}
+              model={paneController.paneHeaderModel}
               sessionId={paneState.sessionInfo?.sessionId}
               totalCost={paneState.totalCost}
               title={session?.title}
               titleGenerating={session?.titleGenerating}
-              planMode={isActiveSessionPane ? settings.planMode : !!session?.planMode}
-              permissionMode={paneState.sessionInfo?.permissionMode}
-              acpPermissionBehavior={isActiveSessionPane && session?.engine === "acp" ? settings.acpPermissionBehavior : undefined}
+              planMode={paneController.panePlanMode}
+              permissionMode={paneController.panePermissionMode}
+              acpPermissionBehavior={paneController.paneEngine === "acp" ? settings.acpPermissionBehavior : undefined}
               onToggleSidebar={displayIndex === 0 ? sidebar.toggle : () => {}}
               showDevFill={isActiveSessionPane ? devFillEnabled : false}
               onSeedDevExampleConversation={isActiveSessionPane ? manager.seedDevExampleConversation : undefined}
@@ -774,8 +1029,8 @@ Link: ${issue.url}`;
             onFullRevert={isActiveSessionPane && manager.isConnected && manager.fullRevert ? handleFullRevert : undefined}
             onTopScrollProgress={paneScrollCallbacks[displayIndex]}
             agents={agents}
-            selectedAgent={selectedPaneAgent}
-            onAgentChange={isActiveSessionPane ? handleAgentChange : undefined}
+            selectedAgent={paneController.selectedPaneAgent}
+            onAgentChange={paneController.handlePaneAgentChange}
           />
           <div
             className={`pointer-events-none absolute inset-x-0 bottom-0 z-[5] transition-opacity duration-200 ${isIsland ? "h-24" : "h-28"}`}
@@ -785,56 +1040,45 @@ Link: ${issue.url}`;
             <BottomComposer
               pendingPermission={paneState.pendingPermission}
               onRespondPermission={paneState.engine.respondPermission}
-              onSend={handlePaneSend}
-              onClear={isActiveSessionPane ? handleComposerClear : undefined}
-              onStop={handlePaneStop}
+              onSend={paneController.handlePaneSend}
+              onClear={paneController.handlePaneClear}
+              onStop={paneController.handlePaneStop}
               isProcessing={paneState.isProcessing}
               queuedCount={isActiveSessionPane ? manager.queuedCount : 0}
-              model={session?.model ?? paneState.sessionInfo?.model ?? settings.model}
-              claudeEffort={settings.claudeEffort}
-              planMode={isActiveSessionPane ? settings.planMode : !!session?.planMode}
-              permissionMode={paneState.sessionInfo?.permissionMode ?? settings.permissionMode}
-              onModelChange={handleModelChange}
-              onClaudeModelEffortChange={handleClaudeModelEffortChange}
-              onPlanModeChange={handlePlanModeChange}
-              onPermissionModeChange={handlePermissionModeChange}
+              model={paneController.paneModel}
+              claudeEffort={paneController.paneClaudeEffort}
+              planMode={paneController.panePlanMode}
+              permissionMode={paneController.panePermissionMode}
+              onModelChange={paneController.handlePaneModelChange}
+              onClaudeModelEffortChange={paneController.handlePaneClaudeModelEffortChange}
+              onPlanModeChange={paneController.handlePanePlanModeChange}
+              onPermissionModeChange={paneController.handlePanePermissionModeChange}
               projectPath={paneProjectPath}
               contextUsage={paneState.contextUsage}
               isCompacting={paneState.isCompacting}
               onCompact={paneState.engine.compact}
               agents={agents}
-              selectedAgent={selectedPaneAgent}
-              onAgentChange={isActiveSessionPane ? handleAgentChange : undefined}
-              slashCommands={isActiveSessionPane ? manager.slashCommands : paneState.engine.slashCommands}
-              acpConfigOptions={isActiveSessionPane ? manager.acpConfigOptions : paneState.acp.configOptions}
-              acpConfigOptionsLoading={isActiveSessionPane ? manager.acpConfigOptionsLoading : false}
-              onACPConfigChange={isActiveSessionPane ? manager.setACPConfig : paneState.acp.setConfig}
-              acpPermissionBehavior={isActiveSessionPane ? settings.acpPermissionBehavior : undefined}
-              onAcpPermissionBehaviorChange={isActiveSessionPane ? settings.setAcpPermissionBehavior : undefined}
-              supportedModels={
-                isActiveSessionPane
-                  ? manager.supportedModels
-                  : session?.engine === "codex"
-                    ? (paneState.codex.codexModels.length > 0 ? paneState.codex.codexModels : manager.supportedModels)
-                    : session?.engine === "acp"
-                      ? []
-                      : paneState.claude.supportedModels.length > 0
-                        ? paneState.claude.supportedModels
-                        : manager.supportedModels
-              }
-              codexModelsLoadingMessage={isActiveSessionPane ? manager.codexModelsLoadingMessage : null}
-              codexEffort={isActiveSessionPane ? manager.codexEffort : undefined}
-              onCodexEffortChange={isActiveSessionPane ? manager.setCodexEffort : undefined}
-              codexModelData={isActiveSessionPane ? manager.codexRawModels : undefined}
+              selectedAgent={paneController.selectedPaneAgent}
+              onAgentChange={paneController.handlePaneAgentChange}
+              slashCommands={paneController.paneSlashCommands}
+              acpConfigOptions={paneController.paneAcpConfigOptions}
+              acpConfigOptionsLoading={paneController.paneAcpConfigOptionsLoading}
+              onACPConfigChange={paneController.handlePaneAcpConfigChange}
+              acpPermissionBehavior={settings.acpPermissionBehavior}
+              onAcpPermissionBehaviorChange={settings.setAcpPermissionBehavior}
+              supportedModels={paneController.paneSupportedModels}
+              codexModelsLoadingMessage={paneController.paneCodexModelsLoadingMessage}
+              codexEffort={paneController.paneCodexEffort}
+              onCodexEffortChange={paneController.handlePaneCodexEffortChange}
+              codexModelData={manager.codexRawModels}
               grabbedElements={isActiveSessionPane ? grabbedElements : []}
               onRemoveGrabbedElement={handleRemoveGrabbedElement}
-              lockedEngine={isActiveSessionPane ? lockedEngine : (session?.engine ?? null)}
+              lockedEngine={isActiveSessionPane ? lockedEngine : (paneController.paneEngine ?? null)}
               lockedAgentId={isActiveSessionPane ? lockedAgentId : (session?.agentId ?? null)}
               selectedWorktreePath={paneProjectPath}
               onSelectWorktree={isActiveSessionPane ? handleAgentWorktreeChange : undefined}
               isEmptySession={paneState.messages.length === 0}
               isIslandLayout={isIsland}
-              controlsReadOnly={!isActiveSessionPane}
             />
           </div>
         </div>
@@ -900,13 +1144,28 @@ Link: ${issue.url}`;
         </PaneToolDrawer>
       </motion.div>
     );
-  }, [activeProjectPath, activeSpaceTerminalCwd, activeSpaceTerminals.activeTabId, activeSpaceTerminals.tabs, agents, availableContextual, bottomFadeBackground, chatFadeStrength, devFillEnabled, getPreviewPaneMetrics, grabbedElements, handleAgentChange, handleAgentWorktreeChange, handleClaudeModelEffortChange, handleCloseSplitPane, handleComposerClear, handleElementGrab, handleFullRevert, handleModelChange, handlePermissionModeChange, handlePlanModeChange, handleRemoveGrabbedElement, handleRevert, handleSeedDevExampleSpaceData, handleSend, handleStop, isIsland, lockedAgentId, lockedEngine, manager, paneScrollCallbacks, projectManager.projects, resolvedTheme, selectedAgent, settings, shouldAnimateTopRowLayout, showThinking, sidebar.isOpen, sidebar.toggle, spaceManager.activeSpaceId, spaceTerminals, splitView, titlebarSurfaceColor, topFadeBackground, wrappedHandleSend]);
+  }, [activeProjectPath, activeSpaceTerminalCwd, activeSpaceTerminals.activeTabId, activeSpaceTerminals.tabs, availableContextual, bottomFadeBackground, buildPaneController, chatFadeStrength, devFillEnabled, getPreviewPaneMetrics, grabbedElements, handleAgentWorktreeChange, handleCloseSplitPane, handleElementGrab, handleFullRevert, handleRemoveGrabbedElement, handleRevert, handleSeedDevExampleSpaceData, isIsland, lockedAgentId, lockedEngine, manager, paneScrollCallbacks, projectManager.projects, resolvedTheme, settings.acpPermissionBehavior, settings.setAcpPermissionBehavior, shouldAnimateTopRowLayout, showThinking, sidebar.isOpen, sidebar.toggle, spaceManager.activeSpaceId, spaceTerminals, splitView, titlebarSurfaceColor, topFadeBackground]);
+
+  const activePaneController = manager.activeSessionId
+    ? buildPaneController(
+      manager.activeSessionId,
+      manager.activeSession,
+      manager.primaryPane,
+      true,
+    )
+    : null;
 
   const { activeTools } = settings;
   const showCodexAuthDialog =
     !!manager.activeSessionId &&
     manager.activeSession?.engine === "codex" &&
     manager.codexAuthRequired;
+  const acpAuthAgentName = manager.acpAuthAgentId
+    ? agents.find((agent) => agent.id === manager.acpAuthAgentId)?.name ?? manager.acpAuthAgentId
+    : "ACP Agent";
+  const showAcpAuthDialog =
+    !!manager.acpAuthSessionId &&
+    manager.acpAuthRequired;
 
   return (
     <div
@@ -1194,13 +1453,13 @@ Link: ${issue.url}`;
                   sidebarOpen={sidebar.isOpen}
                   showSidebarToggle={true}
                   isProcessing={manager.isProcessing}
-                  model={manager.sessionInfo?.model}
+                  model={activePaneController?.paneHeaderModel}
                   sessionId={manager.sessionInfo?.sessionId}
                   totalCost={manager.totalCost}
                   title={manager.activeSession?.title}
                   titleGenerating={manager.activeSession?.titleGenerating}
-                  planMode={settings.planMode}
-                  permissionMode={manager.sessionInfo?.permissionMode}
+                  planMode={activePaneController?.panePlanMode ?? settings.planMode}
+                  permissionMode={activePaneController?.panePermissionMode}
                   acpPermissionBehavior={manager.activeSession?.engine === "acp" ? settings.acpPermissionBehavior : undefined}
                   onToggleSidebar={sidebar.toggle}
                   showDevFill={devFillEnabled}
@@ -1256,31 +1515,31 @@ Link: ${issue.url}`;
                   onStop={handleStop}
                   isProcessing={manager.isProcessing}
                   queuedCount={manager.queuedCount}
-                  model={settings.model}
-                  claudeEffort={settings.claudeEffort}
-                  planMode={settings.planMode}
-                  permissionMode={manager.sessionInfo?.permissionMode ?? settings.permissionMode}
-                  onModelChange={handleModelChange}
-                  onClaudeModelEffortChange={handleClaudeModelEffortChange}
-                  onPlanModeChange={handlePlanModeChange}
-                  onPermissionModeChange={handlePermissionModeChange}
+                  model={activePaneController?.paneModel ?? settings.model}
+                  claudeEffort={activePaneController?.paneClaudeEffort ?? settings.claudeEffort}
+                  planMode={activePaneController?.panePlanMode ?? settings.planMode}
+                  permissionMode={activePaneController?.panePermissionMode ?? (manager.sessionInfo?.permissionMode ?? settings.permissionMode)}
+                  onModelChange={activePaneController?.handlePaneModelChange ?? handleModelChange}
+                  onClaudeModelEffortChange={activePaneController?.handlePaneClaudeModelEffortChange ?? handleClaudeModelEffortChange}
+                  onPlanModeChange={activePaneController?.handlePanePlanModeChange ?? handlePlanModeChange}
+                  onPermissionModeChange={activePaneController?.handlePanePermissionModeChange ?? handlePermissionModeChange}
                   projectPath={activeProjectPath}
                   contextUsage={manager.contextUsage}
                   isCompacting={manager.isCompacting}
                   onCompact={manager.compact}
                   agents={agents}
-                  selectedAgent={selectedAgent}
-                  onAgentChange={handleAgentChange}
-                  slashCommands={manager.slashCommands}
-                  acpConfigOptions={manager.acpConfigOptions}
-                  acpConfigOptionsLoading={manager.acpConfigOptionsLoading}
-                  onACPConfigChange={manager.setACPConfig}
+                  selectedAgent={activePaneController?.selectedPaneAgent ?? selectedAgent}
+                  onAgentChange={activePaneController?.handlePaneAgentChange ?? handleAgentChange}
+                  slashCommands={activePaneController?.paneSlashCommands ?? manager.slashCommands}
+                  acpConfigOptions={activePaneController?.paneAcpConfigOptions ?? manager.acpConfigOptions}
+                  acpConfigOptionsLoading={activePaneController?.paneAcpConfigOptionsLoading ?? manager.acpConfigOptionsLoading}
+                  onACPConfigChange={activePaneController?.handlePaneAcpConfigChange ?? manager.setACPConfig}
                   acpPermissionBehavior={settings.acpPermissionBehavior}
                   onAcpPermissionBehaviorChange={settings.setAcpPermissionBehavior}
-                  supportedModels={manager.supportedModels}
-                  codexModelsLoadingMessage={manager.codexModelsLoadingMessage}
-                  codexEffort={manager.codexEffort}
-                  onCodexEffortChange={manager.setCodexEffort}
+                  supportedModels={activePaneController?.paneSupportedModels ?? manager.supportedModels}
+                  codexModelsLoadingMessage={activePaneController?.paneCodexModelsLoadingMessage ?? manager.codexModelsLoadingMessage}
+                  codexEffort={activePaneController?.paneCodexEffort ?? manager.codexEffort}
+                  onCodexEffortChange={activePaneController?.handlePaneCodexEffortChange ?? manager.setCodexEffort}
                   codexModelData={manager.codexRawModels}
                   grabbedElements={grabbedElements}
                   onRemoveGrabbedElement={handleRemoveGrabbedElement}
@@ -1753,6 +2012,16 @@ Link: ${issue.url}`;
           sessionId={manager.activeSessionId!}
           onComplete={() => manager.clearCodexAuthRequired()}
           onCancel={() => manager.clearCodexAuthRequired()}
+        />
+      )}
+      {showAcpAuthDialog && (
+        <ACPAuthDialog
+          sessionId={manager.acpAuthSessionId!}
+          agentId={manager.acpAuthAgentId}
+          agentName={acpAuthAgentName}
+          authMethods={manager.acpAuthMethods}
+          onComplete={(result) => manager.completeAcpAuth(result)}
+          onCancel={manager.cancelAcpAuth}
         />
       )}
       <FilePreviewOverlay

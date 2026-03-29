@@ -108,6 +108,7 @@ export function useSessionLifecycle({
     draftAcpSessionIdRef,
     draftProjectIdRef,
     startOptionsRef,
+    pendingAcpDraftPromptRef,
     acpAgentIdRef,
     acpAgentSessionIdRef,
     messageQueueRef,
@@ -140,11 +141,34 @@ export function useSessionLifecycle({
     return cached;
   }, []);
 
+  const persistSessionPatch = useCallback((
+    sessionId: string,
+    patch: Partial<PersistedSession>,
+  ) => {
+    const session = sessionsRef.current.find((entry) => entry.id === sessionId);
+    if (!session) return;
+
+    setSessions((prev) =>
+      prev.map((entry) => (entry.id === sessionId ? { ...entry, ...patch } : entry)),
+    );
+
+    window.claude.sessions.load(session.projectId, sessionId).then((data) => {
+      if (data) {
+        window.claude.sessions.save({ ...data, ...patch });
+      }
+    }).catch(() => { /* session may have been deleted */ });
+  }, [sessionsRef, setSessions]);
+
   const applyLoadedSession = useCallback((id: string, data: PersistedSession) => {
     startTransition(() => {
       setStartOptions((prev) => ({
         ...prev,
+        engine: data.engine ?? "claude",
+        model: data.model,
+        effort: data.effort,
+        permissionMode: data.permissionMode,
         planMode: !!data.planMode,
+        agentId: data.agentId,
       }));
       setInitialMessages(data.messages);
       setInitialMeta({
@@ -167,6 +191,8 @@ export function useSessionLifecycle({
             ...(data.agentId ? { agentId: data.agentId } : {}),
             ...(data.agentSessionId ? { agentSessionId: data.agentSessionId } : {}),
             ...(data.codexThreadId ? { codexThreadId: data.codexThreadId } : {}),
+            ...(data.effort ? { effort: data.effort } : {}),
+            ...(data.permissionMode ? { permissionMode: data.permissionMode } : {}),
             planMode: !!data.planMode,
             hasPendingPermission: false,
           } : {}),
@@ -374,7 +400,12 @@ export function useSessionLifecycle({
       if (!session) return;
       setStartOptions((prev) => ({
         ...prev,
+        engine: session.engine ?? "claude",
+        model: session.model,
+        effort: session.effort,
+        permissionMode: session.permissionMode,
         planMode: !!session.planMode,
+        agentId: session.agentId,
       }));
 
       // Switch to the correct space for this session's project — ensures that
@@ -667,15 +698,7 @@ export function useSessionLifecycle({
     if (!session) return;
 
     const persistModel = () => {
-      setSessions((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, model } : s)),
-      );
-
-      window.claude.sessions.load(session.projectId, id).then((data) => {
-        if (data) {
-          window.claude.sessions.save({ ...data, model });
-        }
-      }).catch(() => { /* session may have been deleted */ });
+      persistSessionPatch(id, { model });
     };
 
     const isLiveClaudeSession = (session.engine ?? "claude") === "claude"
@@ -718,7 +741,7 @@ export function useSessionLifecycle({
       applyCodexDefaultEffort(model);
     }
     persistModel();
-  }, [claude.setModel, resetCodexEffortToModelDefault, eagerStartSession, abandonEagerSession]);
+  }, [claude.setModel, resetCodexEffortToModelDefault, eagerStartSession, abandonEagerSession, persistSessionPatch]);
 
   const setActivePermissionMode = useCallback((permissionMode: string) => {
     const id = activeSessionIdRef.current;
@@ -743,6 +766,8 @@ export function useSessionLifecycle({
       return;
     }
 
+    persistSessionPatch(id, { permissionMode: normalizedPermission });
+
     const sessionEngine = sessionsRef.current.find((s) => s.id === id)?.engine ?? "claude";
     if (sessionEngine === "claude") {
       engine.setPermissionMode(effectiveClaudeMode);
@@ -751,7 +776,7 @@ export function useSessionLifecycle({
     if (sessionEngine === "codex") {
       engine.setPermissionMode(normalizedPermission);
     }
-  }, [engine.setPermissionMode]);
+  }, [engine.setPermissionMode, persistSessionPatch]);
 
   const setActivePlanMode = useCallback((planMode: boolean) => {
     const id = activeSessionIdRef.current;
@@ -787,20 +812,13 @@ export function useSessionLifecycle({
     }
 
     const sessionEngine = sessionsRef.current.find((s) => s.id === id)?.engine ?? "claude";
-    const session = sessionsRef.current.find((s) => s.id === id);
-    if (session) {
-      window.claude.sessions.load(session.projectId, id).then((data) => {
-        if (data) {
-          window.claude.sessions.save({ ...data, planMode });
-        }
-      }).catch(() => { /* session may have been deleted */ });
-    }
+    persistSessionPatch(id, { planMode });
     if (sessionEngine === "claude") {
       engine.setPermissionMode(effectiveClaudeMode);
     }
     // Codex: no mid-session mode RPC — collaborationMode is sent per-turn on turn/start.
     // startOptions is already updated above, so the next send() will pick it up.
-  }, [engine.setPermissionMode, sessionInfoRef, startOptionsRef]);
+  }, [engine.setPermissionMode, persistSessionPatch, sessionInfoRef, startOptionsRef]);
 
   const setActiveThinking = useCallback((thinkingEnabled: boolean) => {
     const id = activeSessionIdRef.current;
@@ -864,13 +882,20 @@ export function useSessionLifecycle({
     }
 
     const sessionEngine = sessionsRef.current.find((s) => s.id === id)?.engine ?? "claude";
-    if (sessionEngine !== "claude" || !liveSessionIdsRef.current.has(id)) return;
+    if (sessionEngine !== "claude") return;
+
+    if (!liveSessionIdsRef.current.has(id)) {
+      persistSessionPatch(id, { effort });
+      return;
+    }
 
     const restartResult = await window.claude.restartSession(id, undefined, undefined, effort);
     if (restartResult?.error) {
       toast.error("Failed to update effort", { description: restartResult.error });
+      return;
     }
-  }, [setCachedModels, setDraftMcpStatuses, setStartOptions]);
+    persistSessionPatch(id, { effort });
+  }, [liveSessionIdsRef, persistSessionPatch, sessionsRef, setCachedModels, setDraftMcpStatuses, setStartOptions]);
 
   const setActiveClaudeModelAndEffort = useCallback(async (model: string, effort: ClaudeEffort) => {
     const id = activeSessionIdRef.current;
@@ -912,16 +937,8 @@ export function useSessionLifecycle({
     const sessionEngine = session.engine ?? "claude";
     if (sessionEngine !== "claude") return;
 
-    const persistModel = () => {
-      setSessions((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, model } : s)),
-      );
-
-      window.claude.sessions.load(session.projectId, id).then((data) => {
-        if (data) {
-          window.claude.sessions.save({ ...data, model });
-        }
-      }).catch(() => { /* session may have been deleted */ });
+    const persistModelAndEffort = () => {
+      persistSessionPatch(id, { model, effort });
     };
 
     if (liveSessionIdsRef.current.has(id)) {
@@ -932,8 +949,106 @@ export function useSessionLifecycle({
       }
     }
 
+    persistModelAndEffort();
+  }, [persistSessionPatch, setCachedModels, setDraftMcpStatuses, setStartOptions]);
+
+  const setSessionModel = useCallback(async (sessionId: string, model: string) => {
+    if (!sessionId || sessionId === DRAFT_ID) return;
+
+    const session = sessionsRef.current.find((entry) => entry.id === sessionId);
+    if (!session) return;
+
+    const persistModel = () => {
+      persistSessionPatch(sessionId, { model });
+    };
+
+    if ((session.engine ?? "claude") === "claude" && liveSessionIdsRef.current.has(sessionId)) {
+      const result = await window.claude.setModel(sessionId, model);
+      if (result?.error) {
+        toast.error("Failed to switch model", { description: result.error });
+        return;
+      }
+      persistModel();
+      return;
+    }
+
+    if ((session.engine ?? "claude") === "codex" && liveSessionIdsRef.current.has(sessionId)) {
+      const result = await window.claude.codex.setModel(sessionId, model);
+      if (result?.error) {
+        toast.error("Failed to switch model", { description: result.error });
+        return;
+      }
+      persistModel();
+      return;
+    }
+
     persistModel();
-  }, [setCachedModels, setDraftMcpStatuses, setSessions, setStartOptions]);
+  }, [liveSessionIdsRef, persistSessionPatch, sessionsRef]);
+
+  const setSessionPermissionMode = useCallback(async (sessionId: string, permissionMode: string) => {
+    if (!sessionId || sessionId === DRAFT_ID) return;
+
+    const session = sessionsRef.current.find((entry) => entry.id === sessionId);
+    if (!session) return;
+
+    const normalizedPermission = permissionMode === "plan"
+      ? DEFAULT_PERMISSION_MODE
+      : permissionMode;
+    persistSessionPatch(sessionId, { permissionMode: normalizedPermission });
+
+    if ((session.engine ?? "claude") !== "claude" || !liveSessionIdsRef.current.has(sessionId)) {
+      return;
+    }
+
+    const effectiveClaudeMode = getEffectiveClaudePermissionMode({
+      permissionMode: normalizedPermission,
+      planMode: !!session.planMode,
+    });
+    const result = await window.claude.setPermissionMode(sessionId, effectiveClaudeMode);
+    if (result?.error) {
+      toast.error("Failed to update permission mode", { description: result.error });
+    }
+  }, [liveSessionIdsRef, persistSessionPatch, sessionsRef]);
+
+  const setSessionPlanMode = useCallback(async (sessionId: string, planMode: boolean) => {
+    if (!sessionId || sessionId === DRAFT_ID) return;
+
+    const session = sessionsRef.current.find((entry) => entry.id === sessionId);
+    if (!session) return;
+
+    persistSessionPatch(sessionId, { planMode });
+
+    if ((session.engine ?? "claude") !== "claude" || !liveSessionIdsRef.current.has(sessionId)) {
+      return;
+    }
+
+    const normalizedPermission = session.permissionMode?.trim() || DEFAULT_PERMISSION_MODE;
+    const effectiveClaudeMode = getEffectiveClaudePermissionMode({
+      permissionMode: normalizedPermission,
+      planMode,
+    });
+    const result = await window.claude.setPermissionMode(sessionId, effectiveClaudeMode);
+    if (result?.error) {
+      toast.error("Failed to update plan mode", { description: result.error });
+    }
+  }, [liveSessionIdsRef, persistSessionPatch, sessionsRef]);
+
+  const setSessionClaudeModelAndEffort = useCallback(async (sessionId: string, model: string, effort: ClaudeEffort) => {
+    if (!sessionId || sessionId === DRAFT_ID) return;
+
+    const session = sessionsRef.current.find((entry) => entry.id === sessionId);
+    if (!session || (session.engine ?? "claude") !== "claude") return;
+
+    if (liveSessionIdsRef.current.has(sessionId)) {
+      const restartResult = await window.claude.restartSession(sessionId, undefined, undefined, effort, model);
+      if (restartResult?.error) {
+        toast.error("Failed to update model effort", { description: restartResult.error });
+        return;
+      }
+    }
+
+    persistSessionPatch(sessionId, { model, effort });
+  }, [liveSessionIdsRef, persistSessionPatch, sessionsRef]);
 
   // Update MCP servers for the active ACP session, preserving conversation context.
   const restartAcpSession = useCallback(async (servers: McpServerConfig[], cwdOverride?: string): Promise<{ ok?: boolean; error?: string }> => {
@@ -977,10 +1092,10 @@ export function useSessionLifecycle({
       cwd: nextCwd,
       mcpServers: servers,
     });
-    if (result.error || !result.sessionId) {
+    if (!("sessionId" in result) || !result.sessionId) {
       // Show error in the UI after restart failure — use setMessages directly
       // because session ID hasn't changed (no reset effect to consume initialMessages)
-      const errorMsg = result.error || "Failed to restart agent session";
+      const errorMsg = ("error" in result && result.error) ? result.error : "Failed to restart agent session";
       acp.setMessages(prev => [...prev, {
         id: `system-error-${Date.now()}`,
         role: "system" as const,
@@ -1006,7 +1121,7 @@ export function useSessionLifecycle({
       totalCost: currentCost,
       contextUsage: contextUsageRef.current,
     });
-    if (result.configOptions?.length) setInitialConfigOptions(result.configOptions);
+    if ("configOptions" in result && result.configOptions?.length) setInitialConfigOptions(result.configOptions);
     setActiveSessionId(newId);
     return { ok: true };
   }, [findProject, getProjectCwd]);
@@ -1217,6 +1332,7 @@ export function useSessionLifecycle({
         const draftEngine = startOptionsRef.current.engine ?? "claude";
 
         if (draftEngine === "acp") {
+          pendingAcpDraftPromptRef.current = { text, images, displayText };
           // Show user message + spinner immediately, before the potentially slow materializeDraft
           const userMsg: UIMessage = {
             id: `user-${Date.now()}`,
@@ -1231,7 +1347,10 @@ export function useSessionLifecycle({
 
           const sessionId = await materializeDraft(text, images, displayText);
           if (!sessionId) {
-            // materializeDraft failed or was cancelled — stop processing (error already shown)
+            // materializeDraft failed, was cancelled, or is waiting for auth.
+            if (!acp.authRequired) {
+              pendingAcpDraftPromptRef.current = null;
+            }
             acp.setIsProcessing(false);
             return;
           }
@@ -1252,7 +1371,10 @@ export function useSessionLifecycle({
               },
             ]);
             acp.setIsProcessing(false);
+            pendingAcpDraftPromptRef.current = null;
+            return;
           }
+          pendingAcpDraftPromptRef.current = null;
           return;
         }
 
@@ -1447,11 +1569,15 @@ export function useSessionLifecycle({
     importCCSession,
     setDraftAgent,
     setActiveModel,
+    setSessionModel,
     setActivePermissionMode,
+    setSessionPermissionMode,
     setActivePlanMode,
+    setSessionPlanMode,
     setActiveThinking,
     setActiveClaudeEffort,
     setActiveClaudeModelAndEffort,
+    setSessionClaudeModelAndEffort,
     restartAcpSession,
     restartActiveSessionInCurrentWorktree,
     fullRevertSession,

@@ -227,6 +227,8 @@ contextBridge.exposeInMainWorld("claude", {
   acp: {
     log: (label: string, data: unknown) => ipcRenderer.send("acp:log", label, data),
     start: (options: { agentId: string; cwd: string; mcpServers?: unknown[] }) => ipcRenderer.invoke("acp:start", options),
+    authenticate: (sessionId: string, methodId: string) =>
+      ipcRenderer.invoke("acp:authenticate", { sessionId, methodId }),
     prompt: (sessionId: string, text: string, images?: unknown[]) =>
       ipcRenderer.invoke("acp:prompt", { sessionId, text, images }),
     stop: (sessionId: string) => ipcRenderer.invoke("acp:stop", sessionId),
@@ -324,6 +326,7 @@ contextBridge.exposeInMainWorld("claude", {
       ipcRenderer.invoke("agents:update-cached-config", agentId, configOptions),
     checkBinaries: (agents: Array<{ id: string; binary: Record<string, { cmd: string; args?: string[] }> }>) =>
       ipcRenderer.invoke("agents:check-binaries", agents),
+    getPlatformKeys: () => ipcRenderer.invoke("agents:get-platform-keys"),
   },
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),

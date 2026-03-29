@@ -8,7 +8,7 @@ export type ThemeOption = "light" | "dark" | "system";
 export type MacBackgroundEffect = "liquid-glass" | "vibrancy" | "off";
 export type CodexBinarySource = "auto" | "managed" | "custom";
 export type ClaudeBinarySource = "auto" | "managed" | "custom";
-export type ClaudeEffort = "low" | "medium" | "high" | "max";
+export type ClaudeEffort = string;
 
 // ── Notification settings ──
 
@@ -205,6 +205,8 @@ export interface SessionBase {
   title: string;
   createdAt: number;
   model?: string;
+  effort?: ClaudeEffort;
+  permissionMode?: string;
   planMode?: boolean;
   totalCost: number;
   engine?: EngineId;

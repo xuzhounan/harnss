@@ -45,6 +45,12 @@ export interface QueuedMessage {
   messageId: string;
 }
 
+export interface PendingAcpDraftPrompt {
+  text: string;
+  images?: ImageAttachment[];
+  displayText?: string;
+}
+
 export interface SessionPaneBootstrap {
   session: ChatSession;
   initialMessages: UIMessage[];
@@ -78,6 +84,7 @@ export interface SharedSessionRefs {
   materializingRef: React.MutableRefObject<boolean>;
   saveTimerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
   messageQueueRef: React.MutableRefObject<Map<string, QueuedMessage[]>>;
+  pendingAcpDraftPromptRef: React.MutableRefObject<PendingAcpDraftPrompt | null>;
   acpAgentIdRef: React.MutableRefObject<string | null>;
   acpAgentSessionIdRef: React.MutableRefObject<string | null>;
   codexRawModelsRef: React.MutableRefObject<CodexModelSummary[]>;

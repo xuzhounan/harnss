@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { ImageAttachment, AcpPermissionBehavior, AppPermissionBehavior, SessionMeta, SlashCommand } from "@/types";
-import type { ACPSessionEvent, ACPPermissionEvent, ACPTurnCompleteEvent, ACPConfigOption, ACPAvailableCommandsUpdate } from "@/types/acp";
+import type {
+  ACPSessionEvent,
+  ACPPermissionEvent,
+  ACPTurnCompleteEvent,
+  ACPConfigOption,
+  ACPAvailableCommandsUpdate,
+  ACPAuthMethod,
+} from "@/types/acp";
 import { ACPStreamingBuffer, normalizeToolInput, normalizeToolResult, deriveToolName, mergeToolInput, pickAutoResponseOption } from "@/lib/acp-adapter";
 import { extractTaskSubagentSteps, getTaskStatus, isTaskToolName } from "@/lib/acp-task-adapter";
 import { suppressNextSessionCompletion } from "@/lib/notification-utils";
@@ -47,11 +54,15 @@ export function useACP({ sessionId, initialMessages, initialConfigOptions, initi
   } = base;
 
   const [configOptions, setConfigOptions] = useState<ACPConfigOption[]>(initialConfigOptions ?? []);
+  const [configOptionsLoading, setConfigOptionsLoading] = useState(false);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>(initialSlashCommands ?? []);
+  const [authRequired, setAuthRequired] = useState(false);
+  const [authMethods, setAuthMethods] = useState<ACPAuthMethod[]>([]);
 
   // Sync initialConfigOptions prop → state (useState ignores prop changes after mount)
   useEffect(() => {
     setConfigOptions(initialConfigOptions ?? []);
+    setConfigOptionsLoading(false);
   }, [initialConfigOptions]);
 
   // Sync initialSlashCommands prop → state
@@ -72,7 +83,10 @@ export function useACP({ sessionId, initialMessages, initialConfigOptions, initi
     acpPermissionRef.current = initialRawAcpPermission ?? null;
     activeTaskRef.current = null;
     setConfigOptions(initialConfigOptions ?? []);
+    setConfigOptionsLoading(false);
     setSlashCommands(initialSlashCommands ?? []);
+    setAuthRequired(false);
+    setAuthMethods([]);
     buffer.current.reset();
     cancelPendingFlush();
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -330,6 +344,7 @@ export function useACP({ sessionId, initialMessages, initialConfigOptions, initi
       const cou = update as { sessionUpdate: "config_option_update"; configOptions: ACPConfigOption[] };
       acpLog("CONFIG_UPDATE", { optionCount: cou.configOptions?.length });
       setConfigOptions(cou.configOptions);
+      setConfigOptionsLoading(false);
     } else if (kind === "usage_update") {
       const uu = update as Extract<typeof update, { sessionUpdate: "usage_update" }>;
       if (uu.size != null || uu.used != null) {
@@ -370,6 +385,7 @@ export function useACP({ sessionId, initialMessages, initialConfigOptions, initi
     if (!sessionId) return;
     acpLog("SESSION_CONNECTED", { sessionId: sessionId.slice(0, 8) });
     setIsConnected(true);
+    setConfigOptionsLoading((initialConfigOptions?.length ?? 0) === 0);
 
     // Fetch any config options buffered in main process during the DRAFT→active transition
     // (events may have arrived before this listener was subscribed)
@@ -378,7 +394,11 @@ export function useACP({ sessionId, initialMessages, initialConfigOptions, initi
         acpLog("CONFIG_FETCHED", { count: result.configOptions.length });
         setConfigOptions(result.configOptions as ACPConfigOption[]);
       }
-    }).catch(() => { /* session may have been stopped */ });
+      setConfigOptionsLoading(false);
+    }).catch(() => {
+      setConfigOptionsLoading(false);
+      /* session may have been stopped */
+    });
 
     // Fetch any available commands buffered in main process during the DRAFT→active transition
     window.claude.acp.getAvailableCommands(sessionId).then(result => {
@@ -490,7 +510,7 @@ export function useACP({ sessionId, initialMessages, initialConfigOptions, initi
       unsubEvent(); unsubPermission(); unsubTurnComplete(); unsubExit();
       cancelPendingFlush();
     };
-  }, [sessionId, handleSessionUpdate, finalizeStreamingMessage, closePendingTools]);
+  }, [closePendingTools, finalizeStreamingMessage, handleSessionUpdate, initialConfigOptions, sessionId]);
 
   const send = useCallback(async (text: string, images?: ImageAttachment[], displayText?: string) => {
     if (!sessionId) return;
@@ -615,10 +635,33 @@ export function useACP({ sessionId, initialMessages, initialConfigOptions, initi
     if (result.configOptions) {
       setConfigOptions(result.configOptions);
     }
+    setConfigOptionsLoading(false);
   }, [sessionId]);
 
   const compact = useCallback(async () => { /* no-op for ACP */ }, []);
   const setPermissionMode = useCallback(async (_mode: string) => { /* no-op for ACP */ }, []);
+  const authenticate = useCallback(async (methodId: string) => {
+    if (!sessionId) return { error: "ACP session not found." };
+    const result = await window.claude.acp.authenticate(sessionId, methodId);
+    if (result.configOptions) {
+      setConfigOptions(result.configOptions);
+    }
+    setConfigOptionsLoading(false);
+    if (result.authMethods) {
+      setAuthMethods(result.authMethods);
+    }
+    if (result.ok) {
+      setAuthRequired(false);
+      setIsConnected(true);
+    } else if (result.authRequired) {
+      setAuthRequired(true);
+    }
+    return result;
+  }, [sessionId]);
+  const clearAuthRequired = useCallback(() => {
+    setAuthRequired(false);
+    setAuthMethods([]);
+  }, []);
 
   return {
     messages, setMessages,
@@ -630,7 +673,13 @@ export function useACP({ sessionId, initialMessages, initialConfigOptions, initi
     send, sendRaw, stop, interrupt, compact,
     pendingPermission, respondPermission,
     setPermissionMode,
-    configOptions, setConfigOptions, setConfig,
+    configOptions, setConfigOptions, setConfig, configOptionsLoading,
     slashCommands,
+    authRequired,
+    authMethods,
+    setAuthRequired,
+    setAuthMethods,
+    clearAuthRequired,
+    authenticate,
   };
 }

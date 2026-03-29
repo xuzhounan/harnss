@@ -317,6 +317,8 @@ export function useSessionPersistence({
         createdAt: session.createdAt,
         messages: msgs,
         model: session.model || sessionInfo?.model,
+        effort: session.effort,
+        permissionMode: session.permissionMode,
         planMode: session.planMode,
         totalCost: totalCostRef.current,
         contextUsage: contextUsageRef.current,
@@ -368,6 +370,10 @@ export function useSessionPersistence({
           updates.model = sessionInfo.model;
         }
 
+        if (sessionInfo?.permissionMode && s.permissionMode !== sessionInfo.permissionMode) {
+          updates.permissionMode = sessionInfo.permissionMode;
+        }
+
         // Total cost sync
         if (totalCost !== 0 && s.totalCost !== totalCost) {
           updates.totalCost = totalCost;
@@ -394,7 +400,7 @@ export function useSessionPersistence({
       });
       return changed ? next : prev;
     });
-  }, [activeSessionId, sessionInfo?.model, totalCost, messages.length, engine.isProcessing, engine.pendingPermission]);
+  }, [activeSessionId, sessionInfo?.model, sessionInfo?.permissionMode, totalCost, messages.length, engine.isProcessing, engine.pendingPermission]);
 
   // Save current session to disk (used before switching/creating)
   const saveCurrentSession = useCallback(async () => {

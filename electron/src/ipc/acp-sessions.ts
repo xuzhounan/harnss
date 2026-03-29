@@ -10,9 +10,20 @@ import type { InstalledAgent } from "../lib/agent-registry";
 import { getMcpAuthHeaders } from "../lib/mcp-oauth-flow";
 import { extractErrorMessage, reportError } from "../lib/error-utils";
 import { captureEvent } from "../lib/posthog";
+import {
+  buildAuthRequiredError,
+  extractAuthRequired,
+  getAuthGuidance,
+  normalizeAcpAuthMethods,
+} from "../lib/acp-auth";
 
 // ACP SDK is ESM-only, must be async-imported
-import type { ClientSideConnection } from "@agentclientprotocol/sdk";
+import type {
+  ClientSideConnection,
+  ContentBlock,
+  McpServer,
+  RequestPermissionResponse,
+} from "@agentclientprotocol/sdk";
 let _acp: typeof import("@agentclientprotocol/sdk") | null = null;
 async function getACP() {
   if (!_acp) _acp = await import("@agentclientprotocol/sdk");
@@ -21,6 +32,7 @@ async function getACP() {
 
 import { resolveACPFilePath, applyReadRange } from "@shared/lib/acp-helpers";
 import type { ACPTextFileParams } from "@shared/lib/acp-helpers";
+import type { ACPAuthMethod, ACPAuthenticateResult } from "@shared/types/acp";
 
 type ACPReadTextFileParams = ACPTextFileParams & { content?: string; line?: number | null; limit?: number | null };
 type ACPWriteTextFileParams = ACPTextFileParams & { content: string };
@@ -47,16 +59,27 @@ const ACP_CLIENT_CAPABILITIES = {
   fs: { readTextFile: true, writeTextFile: true },
 } as const;
 
+const ACP_INIT_TIMEOUT_MS = 15000;
+const ACP_START_TIMEOUT_MS = 20000;
+const ACP_AUTH_TIMEOUT_MS = 120000;
+
 interface ACPSessionEntry {
   process: ChildProcess;
   connection: ClientSideConnection;
-  acpSessionId: string;
+  acpSessionId?: string;
   internalId: string;
   analyticsProperties: AcpAnalyticsProperties;
   eventCounter: number;
-  pendingPermissions: Map<string, { resolve: (response: unknown) => void }>;
+  pendingPermissions: Map<string, { resolve: (response: RequestPermissionResponse) => void }>;
   cwd: string;
   supportsLoadSession: boolean;
+  agentName: string;
+  authMethods: ACPAuthMethod[];
+  pendingStartRequest?: {
+    cwd: string;
+    mcpServers: McpServer[];
+    sourceServers: McpServerInput[];
+  };
   /** True while session/load is in-flight — suppresses history replay notifications from reaching the renderer */
   isReloading: boolean;
   /** ACP-side session IDs for ephemeral utility prompts (title gen, commit msg) */
@@ -176,8 +199,8 @@ function summarizeUpdate(update: Record<string, unknown>): string {
 type McpServerInput = { name: string; transport: string; command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string> };
 
 /** Convert renderer MCP server configs to ACP SDK format (with fresh auth headers). */
-async function buildAcpMcpServers(servers: McpServerInput[]): Promise<unknown[]> {
-  return (await Promise.all(servers.map(async (s) => {
+async function buildAcpMcpServers(servers: McpServerInput[]): Promise<McpServer[]> {
+  const resolved = await Promise.all(servers.map(async (s): Promise<McpServer | null> => {
     if (s.transport === "stdio") {
       if (!s.command) { log("ACP_MCP_WARN", `Server "${s.name}" (stdio) missing command — skipping`); return null; }
       return {
@@ -196,12 +219,13 @@ async function buildAcpMcpServers(servers: McpServerInput[]): Promise<unknown[]>
       url: s.url,
       headers: Object.entries(mergedHeaders).map(([name, value]) => ({ name, value })),
     };
-  }))).filter(Boolean);
+  }));
+  return resolved.filter((server): server is McpServer => server != null);
 }
 
 /** Merge configOptions from session response, event buffer, and unstable models API. */
 function resolveConfigOptions(
-  sessionResult: { configOptions?: unknown[]; models?: unknown },
+  sessionResult: { configOptions?: unknown[] | null; models?: unknown },
   internalId: string,
   logLabel: string,
 ): unknown[] {
@@ -235,9 +259,56 @@ function resolveConfigOptions(
 interface AcpConnectionResult {
   proc: ChildProcess;
   connection: ClientSideConnection;
-  pendingPermissions: Map<string, { resolve: (r: unknown) => void }>;
+  pendingPermissions: Map<string, { resolve: (r: RequestPermissionResponse) => void }>;
   internalId: string;
   supportsLoadSession: boolean;
+  authMethods: ACPAuthMethod[];
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, stage: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return new Promise<T>((resolve, reject) => {
+    timer = setTimeout(() => {
+      timer = null;
+      reject(new Error(`${stage} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        if (timer) clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        if (timer) clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+function deriveMcpStatuses(servers: McpServerInput[]): Array<{ name: string; status: "connected" }> {
+  return servers.map((server) => ({
+    name: server.name,
+    status: "connected" as const,
+  }));
+}
+
+async function finalizePendingAcpSession(
+  entry: ACPSessionEntry,
+  sessionResult: { sessionId: string; configOptions?: unknown[] | null; models?: unknown },
+  sourceServers: McpServerInput[],
+  logLabel: string,
+): Promise<ACPAuthenticateResult> {
+  entry.acpSessionId = sessionResult.sessionId;
+  entry.pendingStartRequest = undefined;
+  const configOptions = resolveConfigOptions(sessionResult, entry.internalId, logLabel);
+  return {
+    ok: true,
+    sessionId: entry.internalId,
+    agentSessionId: sessionResult.sessionId,
+    agentName: entry.agentName,
+    configOptions: configOptions as ACPAuthenticateResult["configOptions"],
+    mcpStatuses: deriveMcpStatuses(sourceServers),
+  };
 }
 
 /**
@@ -248,6 +319,7 @@ async function createAcpConnection(
   agentDef: { binary: string; args?: string[]; env?: Record<string, string>; name: string },
   getMainWindow: () => BrowserWindow | null,
   logLabel: string,
+  onSpawn?: (internalId: string, proc: ChildProcess) => void,
 ): Promise<AcpConnectionResult> {
   const acp = await getACP();
   const internalId = crypto.randomUUID();
@@ -257,6 +329,7 @@ async function createAcpConnection(
     env: { ...process.env, ...agentDef.env },
     shell: process.platform === "win32",
   });
+  onSpawn?.(internalId, proc);
 
   // Process lifecycle handlers
   proc.on("error", (err) => {
@@ -301,7 +374,7 @@ async function createAcpConnection(
   const input = Writable.toWeb(proc.stdin!) as WritableStream;
   const output = Readable.toWeb(proc.stdout!) as ReadableStream<Uint8Array>;
   const stream = acp.ndJsonStream(input, output);
-  const pendingPermissions = new Map<string, { resolve: (r: unknown) => void }>();
+  const pendingPermissions = new Map<string, { resolve: (r: RequestPermissionResponse) => void }>();
 
   const connection = new acp.ClientSideConnection((_agent) => ({
     async sessionUpdate(params: Record<string, unknown>) {
@@ -367,7 +440,7 @@ async function createAcpConnection(
         return { outcome: { outcome: "selected", optionId: rejectOption?.optionId ?? "reject" } };
       }
 
-      return new Promise((resolve) => {
+      return new Promise<RequestPermissionResponse>((resolve) => {
         const requestId = crypto.randomUUID();
         const toolCall = (params as { toolCall: Record<string, unknown> }).toolCall;
         const opts = (params as { options: unknown[] }).options;
@@ -407,14 +480,15 @@ async function createAcpConnection(
 
   // Protocol initialization
   log(logLabel, `Initializing protocol...`);
-  const initResult = await connection.initialize({
+  const initResult = await withTimeout(connection.initialize({
     protocolVersion: acp.PROTOCOL_VERSION,
     clientCapabilities: ACP_CLIENT_CAPABILITIES,
-  });
+  }), ACP_INIT_TIMEOUT_MS, `${agentDef.name} ACP initialize`);
   const supportsLoadSession = initResult.agentCapabilities?.loadSession === true;
-  log(logLabel, `Initialized protocol v${initResult.protocolVersion} for ${agentDef.name} (loadSession=${supportsLoadSession})`);
+  const authMethods = normalizeAcpAuthMethods((initResult as Record<string, unknown>).authMethods);
+  log(logLabel, `Initialized protocol v${initResult.protocolVersion} for ${agentDef.name} (loadSession=${supportsLoadSession}, authMethods=${authMethods.length})`);
 
-  return { proc, connection, pendingPermissions, internalId, supportsLoadSession };
+  return { proc, connection, pendingPermissions, internalId, supportsLoadSession, authMethods };
 }
 
 export function register(getMainWindow: () => BrowserWindow | null): void {
@@ -442,62 +516,78 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
     let connResult: AcpConnectionResult | null = null;
     const analyticsProperties = buildAcpAnalyticsProperties(agentDef);
     try {
-      connResult = await createAcpConnection(agentDef as { binary: string; args?: string[]; env?: Record<string, string>; name: string }, getMainWindow, "ACP_SPAWN");
-      const { proc, connection, pendingPermissions, internalId, supportsLoadSession } = connResult;
-
-      // Track immediately so the renderer can abort during the long protocol init / npx download
-      pendingStartProcess = { id: internalId, process: proc };
+      connResult = await createAcpConnection(
+        agentDef as { binary: string; args?: string[]; env?: Record<string, string>; name: string },
+        getMainWindow,
+        "ACP_SPAWN",
+        (internalId, proc) => {
+          pendingStartProcess = { id: internalId, process: proc };
+        },
+      );
+      const { proc, connection, pendingPermissions, internalId, supportsLoadSession, authMethods } = connResult;
 
       const acpMcpServers = await buildAcpMcpServers(options.mcpServers ?? []);
-
-      log("ACP_SPAWN", `Creating new session with ${acpMcpServers.length} MCP server(s)...`);
-      const sessionResult = await connection.newSession({
-        cwd: options.cwd,
-        mcpServers: acpMcpServers,
-      });
-      log("ACP_SPAWN", `Created session ${sessionResult.sessionId} for ${agentDef.name}`);
-
       const entry: ACPSessionEntry = {
         process: proc,
         connection,
-        acpSessionId: sessionResult.sessionId,
         internalId,
         analyticsProperties,
         eventCounter: 0,
         pendingPermissions,
         cwd: options.cwd,
         supportsLoadSession,
+        agentName: agentDef.name,
+        authMethods,
+        pendingStartRequest: {
+          cwd: options.cwd,
+          mcpServers: acpMcpServers,
+          sourceServers: options.mcpServers ?? [],
+        },
         isReloading: false,
       };
       acpSessions.set(internalId, entry);
 
-      const configOptions = resolveConfigOptions(sessionResult, internalId, "ACP_SPAWN");
-
-      // Derive MCP statuses — ACP doesn't report them, so infer from config
-      const mcpStatuses = (options.mcpServers ?? []).map(s => ({
-        name: s.name,
-        status: "connected" as const,
-      }));
+      log("ACP_SPAWN", `Creating new session with ${acpMcpServers.length} MCP server(s)...`);
+      const sessionResult = await withTimeout(connection.newSession({
+        cwd: options.cwd,
+        mcpServers: acpMcpServers,
+      }), ACP_START_TIMEOUT_MS, `${agentDef.name} ACP session/new`);
+      log("ACP_SPAWN", `Created session ${sessionResult.sessionId} for ${agentDef.name}`);
 
       // Startup succeeded — clear the pending tracker before returning
       pendingStartProcess = null;
 
       void captureEvent("session_created", { engine: "acp", ...analyticsProperties });
 
-      return {
-        sessionId: internalId,
-        agentSessionId: sessionResult.sessionId,
-        agentName: agentDef.name,
-        configOptions,
-        mcpStatuses,
-      };
+      return await finalizePendingAcpSession(entry, sessionResult, options.mcpServers ?? [], "ACP_SPAWN");
     } catch (err) {
+      const authMethods = connResult?.authMethods ?? [];
+      const authRequiredMethods = extractAuthRequired(err, authMethods);
+      if (authRequiredMethods && connResult) {
+        pendingStartProcess = null;
+        const entry = acpSessions.get(connResult.internalId);
+        if (entry) {
+          entry.authMethods = authRequiredMethods;
+        }
+        return {
+          authRequired: true as const,
+          sessionId: connResult.internalId,
+          agentName: agentDef.name,
+          authMethods: authRequiredMethods,
+        };
+      }
+
       // Check if the user intentionally aborted the start (stop button during download)
       const wasAborted = pendingStartProcess?.aborted === true;
       pendingStartProcess = null;
 
       // Kill the spawned process to avoid orphans
       try { connResult?.proc?.kill(); } catch { /* already dead */ }
+      if (connResult?.internalId) {
+        acpSessions.delete(connResult.internalId);
+        configBuffer.delete(connResult.internalId);
+        commandsBuffer.delete(connResult.internalId);
+      }
 
       if (wasAborted) {
         log("ACP_SPAWN", `Aborted by user`);
@@ -506,6 +596,56 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
 
       const msg = reportError("ACP_SPAWN", err, { engine: "acp", ...analyticsProperties });
       return { error: msg };
+    }
+  });
+
+  ipcMain.handle("acp:authenticate", async (_event, { sessionId, methodId }: { sessionId: string; methodId: string }) => {
+    const session = acpSessions.get(sessionId);
+    if (!session) {
+      return { error: "ACP session not found." };
+    }
+    if (!session.pendingStartRequest) {
+      return { error: "ACP session does not need authentication." };
+    }
+
+    try {
+      await withTimeout(
+        session.connection.authenticate({ methodId }),
+        ACP_AUTH_TIMEOUT_MS,
+        `${session.agentName} ACP authenticate(${methodId})`,
+      );
+
+      const sessionResult = await withTimeout(session.connection.newSession({
+        cwd: session.pendingStartRequest.cwd,
+        mcpServers: session.pendingStartRequest.mcpServers,
+      }), ACP_START_TIMEOUT_MS, `${session.agentName} ACP session/new after authenticate`);
+
+      const finalized = await finalizePendingAcpSession(
+        session,
+        sessionResult,
+        session.pendingStartRequest.sourceServers,
+        "ACP_AUTH",
+      );
+
+      return finalized;
+    } catch (err) {
+      const authRequiredMethods = extractAuthRequired(err, session.authMethods);
+      if (authRequiredMethods) {
+        session.authMethods = authRequiredMethods;
+        return {
+          authRequired: true,
+          sessionId,
+          agentName: session.agentName,
+          authMethods: authRequiredMethods,
+          error: buildAuthRequiredError(session.agentName, authRequiredMethods),
+        };
+      }
+
+      const message = extractErrorMessage(err);
+      const guidance = getAuthGuidance(session.agentName, session.authMethods);
+      const error = guidance ? `${message} ${guidance}` : message;
+      log("ACP_AUTH", error);
+      return { error };
     }
   });
 
@@ -529,7 +669,7 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
     const analyticsProperties = buildAcpAnalyticsProperties(agentDef);
     try {
       connResult = await createAcpConnection(agentDef as { binary: string; args?: string[]; env?: Record<string, string>; name: string }, getMainWindow, "ACP_REVIVE");
-      const { proc, connection, pendingPermissions, internalId, supportsLoadSession } = connResult;
+      const { proc, connection, pendingPermissions, internalId, supportsLoadSession, authMethods } = connResult;
 
       const acpMcpServers = await buildAcpMcpServers(options.mcpServers ?? []);
 
@@ -539,9 +679,9 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
 
       if (supportsLoadSession && options.agentSessionId) {
         // Restore full context — suppress history replay from reaching the renderer
-        const entry: ACPSessionEntry = { process: proc, connection, acpSessionId: options.agentSessionId, internalId, analyticsProperties, eventCounter: 0, pendingPermissions, cwd: options.cwd, supportsLoadSession, isReloading: true };
+        const entry: ACPSessionEntry = { process: proc, connection, acpSessionId: options.agentSessionId, internalId, analyticsProperties, eventCounter: 0, pendingPermissions, cwd: options.cwd, supportsLoadSession, agentName: agentDef.name, authMethods, isReloading: true };
         acpSessions.set(internalId, entry);
-        const loadResult = await connection.loadSession({ sessionId: options.agentSessionId, cwd: options.cwd, mcpServers: acpMcpServers });
+        const loadResult = await withTimeout(connection.loadSession({ sessionId: options.agentSessionId, cwd: options.cwd, mcpServers: acpMcpServers }), ACP_START_TIMEOUT_MS, `${agentDef.name} ACP session/load`);
         entry.isReloading = false;
         acpSessionId = options.agentSessionId;
         usedLoad = true;
@@ -550,9 +690,9 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
         log("ACP_REVIVE", `loadSession OK, session=${acpSessionId.slice(0, 12)} configOptions=${configOptions.length}`);
       } else {
         // Fall back to fresh session — UI messages already restored from disk
-        const sessionResult = await connection.newSession({ cwd: options.cwd, mcpServers: acpMcpServers });
+        const sessionResult = await withTimeout(connection.newSession({ cwd: options.cwd, mcpServers: acpMcpServers }), ACP_START_TIMEOUT_MS, `${agentDef.name} ACP session/new`);
         acpSessionId = sessionResult.sessionId;
-        const entry: ACPSessionEntry = { process: proc, connection, acpSessionId, internalId, analyticsProperties, eventCounter: 0, pendingPermissions, cwd: options.cwd, supportsLoadSession, isReloading: false };
+        const entry: ACPSessionEntry = { process: proc, connection, acpSessionId, internalId, analyticsProperties, eventCounter: 0, pendingPermissions, cwd: options.cwd, supportsLoadSession, agentName: agentDef.name, authMethods, isReloading: false };
         acpSessions.set(internalId, entry);
         configOptions = resolveConfigOptions(sessionResult, internalId, "ACP_REVIVE");
         log("ACP_REVIVE", `newSession fallback, session=${acpSessionId.slice(0, 12)}`);
@@ -579,10 +719,14 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
       log("ACP_SEND", `ERROR: session ${sessionId?.slice(0, 8)} not found`);
       return { error: "Session not found" };
     }
+    if (!session.acpSessionId) {
+      return { error: buildAuthRequiredError(session.agentName, session.authMethods) };
+    }
+    const acpSessionId = session.acpSessionId;
 
     log("ACP_SEND", `session=${sessionId.slice(0, 8)} text=${text.slice(0, 500)} images=${images?.length ?? 0}`);
 
-    const prompt: Array<{ type: string; text?: string; data?: string; mimeType?: string }> = [];
+    const prompt: ContentBlock[] = [];
     if (images) {
       for (const img of images) {
         prompt.push({ type: "image", data: img.data, mimeType: img.mediaType });
@@ -593,7 +737,7 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
     try {
       session.lastStderrError = undefined;
       const result = await session.connection.prompt({
-        sessionId: session.acpSessionId,
+        sessionId: acpSessionId,
         prompt,
       });
 
@@ -671,6 +815,10 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
       log("ACP_RELOAD", `session=${sessionId.slice(0, 8)} agent does not support session/load, falling back to restart`);
       return { supportsLoad: false };
     }
+    if (!session.acpSessionId) {
+      return { error: buildAuthRequiredError(session.agentName, session.authMethods), supportsLoad: true };
+    }
+    const acpSessionId = session.acpSessionId;
 
     const nextCwd = cwd ?? session.cwd;
     log("ACP_RELOAD", `session=${sessionId.slice(0, 8)} calling loadSession with ${mcpServers?.length ?? 0} MCP server(s) cwd=${nextCwd}`);
@@ -681,11 +829,11 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
       // Suppress history replay notifications so the renderer doesn't get duplicates
       session.isReloading = true;
       try {
-        await session.connection.loadSession({
-          sessionId: session.acpSessionId,
+        await withTimeout(session.connection.loadSession({
+          sessionId: acpSessionId,
           cwd: nextCwd,
           mcpServers: acpMcpServers,
-        });
+        }), ACP_START_TIMEOUT_MS, `${session.agentName} ACP session/load`);
       } finally {
         // Always reset — even if loadSession throws or process crashes
         if (acpSessions.has(sessionId)) {
@@ -715,9 +863,13 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
       resolver.resolve({ outcome: { outcome: "cancelled" } });
     }
     session.pendingPermissions.clear();
+    if (!session.acpSessionId) {
+      return { ok: true };
+    }
+    const acpSessionId = session.acpSessionId;
 
     try {
-      await session.connection.cancel({ sessionId: session.acpSessionId });
+      await session.connection.cancel({ sessionId: acpSessionId });
       log("ACP_CANCEL", `session=${sessionId.slice(0, 8)} acknowledged`);
       return { ok: true };
     } catch (err) {
@@ -732,6 +884,10 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
       log("ACP_CONFIG", `ERROR: session ${sessionId?.slice(0, 8)} not found`);
       return { error: "Session not found" };
     }
+    if (!session.acpSessionId) {
+      return { error: buildAuthRequiredError(session.agentName, session.authMethods) };
+    }
+    const acpSessionId = session.acpSessionId;
     log("ACP_CONFIG", `session=${sessionId.slice(0, 8)} setting ${configId}=${value}`);
     try {
       const conn = session.connection;
@@ -739,7 +895,7 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
       // Try the stable config option API first
       try {
         const result = await conn.setSessionConfigOption({
-          sessionId: session.acpSessionId,
+          sessionId: acpSessionId,
           configId,
           value,
         });
@@ -751,7 +907,7 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
         if (configId === "model") {
           log("ACP_CONFIG", `session=${sessionId.slice(0, 8)} setSessionConfigOption failed, trying unstable_setSessionModel...`);
           await conn.unstable_setSessionModel({
-            sessionId: session.acpSessionId,
+            sessionId: acpSessionId,
             modelId: value,
           });
           log("ACP_CONFIG", `session=${sessionId.slice(0, 8)} model=${value} OK (via unstable_setSessionModel)`);

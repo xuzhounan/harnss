@@ -6,6 +6,7 @@ import {
   loadUserAgents,
   updateCachedConfig,
   checkBinaries,
+  getRegistryPlatformKeys,
 } from "../lib/agent-registry";
 import type { InstalledAgent } from "../lib/agent-registry";
 
@@ -32,4 +33,5 @@ export function register(): void {
     (_e, agents: Array<{ id: string; binary: Record<string, { cmd: string; args?: string[] }> }>) =>
       checkBinaries(agents),
   );
+  ipcMain.handle("agents:get-platform-keys", () => getRegistryPlatformKeys());
 }

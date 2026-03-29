@@ -7,9 +7,19 @@ import type {
   AppSettings,
   ClaudeEffort,
   MacBackgroundEffect,
+  PermissionUpdate,
   ThemeOption,
 } from "./ui";
-import type { ACPSessionEvent, ACPPermissionEvent, ACPTurnCompleteEvent, ACPConfigOption } from "./acp";
+import type {
+  ACPSessionEvent,
+  ACPPermissionEvent,
+  ACPTurnCompleteEvent,
+  ACPConfigOption,
+  ACPAuthenticateResult,
+  ACPAuthMethod,
+  ACPStartResult,
+  ACPStatusInfo,
+} from "./acp";
 import type { EngineId, AppPermissionBehavior } from "./engine";
 import type { CodexSessionEvent, CodexServerRequest, CodexExitEvent } from "./codex";
 import type { Model as CodexModel } from "./codex-protocol/v2/Model";
@@ -128,7 +138,7 @@ declare global {
           toolName: string;
           toolInput: Record<string, unknown>;
           toolUseId: string;
-          suggestions?: unknown[];
+          suggestions?: PermissionUpdate[];
           decisionReason?: string;
         }) => void,
       ) => () => void;
@@ -281,19 +291,12 @@ declare global {
       };
       acp: {
         log: (label: string, data: unknown) => void;
-        start: (options: { agentId: string; cwd: string; mcpServers?: McpServerConfig[] }) => Promise<{
-          sessionId?: string;
-          agentSessionId?: string;
-          agentName?: string;
-          configOptions?: ACPConfigOption[];
-          mcpStatuses?: Array<{ name: string; status: string }>;
-          error?: string;
-          cancelled?: boolean;
-        }>;
+        start: (options: { agentId: string; cwd: string; mcpServers?: McpServerConfig[] }) => Promise<ACPStartResult>;
+        authenticate: (sessionId: string, methodId: string) => Promise<ACPAuthenticateResult>;
         prompt: (sessionId: string, text: string, images?: unknown[]) => Promise<{ ok?: boolean; error?: string }>;
         stop: (sessionId: string) => Promise<{ ok?: boolean; error?: string }>;
         reloadSession: (sessionId: string, mcpServers?: McpServerConfig[], cwd?: string) => Promise<{ ok?: boolean; supportsLoad?: boolean; error?: string }>;
-        reviveSession: (options: { agentId: string; cwd: string; agentSessionId?: string; mcpServers?: McpServerConfig[] }) => Promise<{ sessionId?: string; agentSessionId?: string; usedLoad?: boolean; configOptions?: ACPConfigOption[]; mcpStatuses?: Array<{ name: string; status: string }>; error?: string }>;
+        reviveSession: (options: { agentId: string; cwd: string; agentSessionId?: string; mcpServers?: McpServerConfig[] }) => Promise<{ sessionId?: string; agentSessionId?: string; usedLoad?: boolean; configOptions?: ACPConfigOption[]; mcpStatuses?: ACPStatusInfo[]; error?: string }>;
         cancel: (sessionId: string) => Promise<{ ok?: boolean; error?: string }>;
         abortPendingStart: () => Promise<{ ok?: boolean }>;
         respondPermission: (sessionId: string, requestId: string, optionId: string) => Promise<{ ok?: boolean; error?: string }>;
@@ -372,6 +375,8 @@ declare global {
         checkBinaries: (
           agents: Array<{ id: string; binary: Record<string, { cmd: string; args?: string[] }> }>,
         ) => Promise<Record<string, { path: string; args?: string[] } | null>>;
+        /** Preferred ACP registry platform keys for the current machine. */
+        getPlatformKeys: () => Promise<string[]>;
       };
       settings: {
         get: () => Promise<AppSettings>;

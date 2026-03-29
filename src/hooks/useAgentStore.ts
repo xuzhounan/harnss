@@ -16,6 +16,7 @@ export function useAgentStore() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [binaryPaths, setBinaryPaths] = useState<Record<string, BinaryCheckResult>>({});
+  const [platformKeys, setPlatformKeys] = useState<string[]>([]);
 
   const checkBinaries = useCallback(async (agents: RegistryAgent[]) => {
     const found = await resolveRegistryBinaryPaths(agents);
@@ -39,6 +40,22 @@ export function useAgentStore() {
     fetchRegistry();
   }, [fetchRegistry]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    void window.claude.agents.getPlatformKeys()
+      .then((keys) => {
+        if (!cancelled) setPlatformKeys(keys);
+      })
+      .catch(() => {
+        if (!cancelled) setPlatformKeys([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Run binary checks in the background after registry loads
   useEffect(() => {
     void checkBinaries(registryAgents);
@@ -50,6 +67,8 @@ export function useAgentStore() {
     error,
     /** Map of agent id → resolved binary path + args for agents found on the system. */
     binaryPaths,
+    /** Preferred registry platform keys for this machine (e.g. darwin-aarch64). */
+    platformKeys,
     /** Re-fetch registry, bypassing cache */
     refresh: useCallback(() => fetchRegistry(true), [fetchRegistry]),
   };

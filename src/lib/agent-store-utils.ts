@@ -1,4 +1,4 @@
-import type { RegistryAgent } from "@/types/registry";
+import type { RegistryAgent, RegistryBinaryTarget } from "@/types/registry";
 import type { InstalledAgent } from "@/types/ui";
 import type { BinaryCheckResult } from "@/lib/acp-agent-registry";
 
@@ -68,4 +68,28 @@ export function isInstallable(
   if (agent.distribution.npx != null) return true;
   if (binaryPaths && binaryPaths[agent.id]) return true;
   return false;
+}
+
+export function getPreferredRegistryBinaryTarget(
+  agent: RegistryAgent,
+  platformKeys: string[],
+): RegistryBinaryTarget | null {
+  const binary = agent.distribution.binary;
+  if (!binary) return null;
+
+  for (const key of platformKeys) {
+    const target = binary[key];
+    if (target) return target;
+  }
+
+  return null;
+}
+
+export function getRegistryAgentSetupUrl(
+  agent: RegistryAgent,
+  platformKeys: string[],
+): string | null {
+  const target = getPreferredRegistryBinaryTarget(agent, platformKeys);
+  if (target?.archive) return target.archive;
+  return agent.repository ?? null;
 }
