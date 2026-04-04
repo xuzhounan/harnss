@@ -103,6 +103,9 @@ interface ToolPickerProps {
   /** Optional transient drag-preview bottom placement set. */
   displayBottomTools?: ReadonlySet<ToolId>;
   onReorder: (fromId: ToolId, toId: ToolId) => void;
+  panelInteractionMode?: "legacy" | "workspace";
+  onPanelToolDragStart?: (event: React.DragEvent<HTMLDivElement>, toolId: ToolId) => void;
+  onPanelToolDragEnd?: () => void;
   /** Current project directory — enables "Open in Editor" button */
   projectPath?: string;
   /** Tools placed in the bottom row */
@@ -191,6 +194,8 @@ function PanelToolWithMenu({
   onDragLeave,
   onDrop,
   onDragEnd,
+  moveToBottomLabel = "Move to Bottom",
+  moveToSideLabel = "Move to Side",
 }: {
   tool: ToolDef;
   isActive: boolean;
@@ -204,10 +209,12 @@ function PanelToolWithMenu({
   onMoveToBottom: () => void;
   onMoveToSide: () => void;
   onDragStart: (e: React.DragEvent) => void;
-  onDragOver: (e: React.DragEvent) => void;
-  onDragLeave: () => void;
-  onDrop: (e: React.DragEvent) => void;
+  onDragOver?: (e: React.DragEvent) => void;
+  onDragLeave?: () => void;
+  onDrop?: (e: React.DragEvent) => void;
   onDragEnd: () => void;
+  moveToBottomLabel?: string;
+  moveToSideLabel?: string;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -255,12 +262,12 @@ function PanelToolWithMenu({
           {isBottom ? (
             <DropdownMenuItem onClick={onMoveToSide} className="gap-2">
               <ArrowRight className="h-3.5 w-3.5" />
-              Move to Side
+              {moveToSideLabel}
             </DropdownMenuItem>
           ) : (
             <DropdownMenuItem onClick={onMoveToBottom} className="gap-2">
               <ArrowDown className="h-3.5 w-3.5" />
-              Move to Bottom
+              {moveToBottomLabel}
             </DropdownMenuItem>
           )}
         </DropdownMenuContent>
@@ -280,6 +287,9 @@ export const ToolPicker = memo(function ToolPicker({
   displayToolOrder,
   displayBottomTools,
   onReorder,
+  panelInteractionMode = "legacy",
+  onPanelToolDragStart,
+  onPanelToolDragEnd,
   projectPath,
   bottomTools,
   onMoveToBottom,
@@ -309,24 +319,32 @@ export const ToolPicker = memo(function ToolPicker({
   // Track which button is being dragged over for visual feedback
   const [dragOverId, setDragOverId] = useState<ToolId | null>(null);
   const [draggingId, setDraggingId] = useState<ToolId | null>(null);
+  const workspaceMode = panelInteractionMode === "workspace";
 
   const handleDragStart = useCallback((e: React.DragEvent, toolId: ToolId) => {
+    if (workspaceMode) {
+      onPanelToolDragStart?.(e as React.DragEvent<HTMLDivElement>, toolId);
+      return;
+    }
     e.dataTransfer.setData("text/plain", toolId);
     e.dataTransfer.effectAllowed = "move";
     setDraggingId(toolId);
-  }, []);
+  }, [onPanelToolDragStart, workspaceMode]);
 
   const handleDragOver = useCallback((e: React.DragEvent, toolId: ToolId) => {
+    if (workspaceMode) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     setDragOverId(toolId);
-  }, []);
+  }, [workspaceMode]);
 
   const handleDragLeave = useCallback(() => {
+    if (workspaceMode) return;
     setDragOverId(null);
-  }, []);
+  }, [workspaceMode]);
 
   const handleDrop = useCallback((e: React.DragEvent, toId: ToolId) => {
+    if (workspaceMode) return;
     e.preventDefault();
     const fromId = e.dataTransfer.getData("text/plain") as ToolId;
     setDragOverId(null);
@@ -334,12 +352,13 @@ export const ToolPicker = memo(function ToolPicker({
     if (fromId && fromId !== toId) {
       onReorder(fromId, toId);
     }
-  }, [onReorder]);
+  }, [onReorder, workspaceMode]);
 
   const handleDragEnd = useCallback(() => {
     setDragOverId(null);
     setDraggingId(null);
-  }, []);
+    onPanelToolDragEnd?.();
+  }, [onPanelToolDragEnd]);
 
   const handleOpenInEditor = useCallback(() => {
     if (projectPath) window.claude.openInEditor(projectPath);
@@ -423,10 +442,11 @@ export const ToolPicker = memo(function ToolPicker({
           onMoveToBottom={() => onMoveToBottom(tool.id)}
           onMoveToSide={() => onMoveToSide(tool.id)}
           onDragStart={(e) => handleDragStart(e, tool.id)}
-          onDragOver={(e) => handleDragOver(e, tool.id)}
-          onDragLeave={handleDragLeave}
-          onDrop={(e) => handleDrop(e, tool.id)}
+          onDragOver={workspaceMode ? undefined : (e) => handleDragOver(e, tool.id)}
+          onDragLeave={workspaceMode ? undefined : handleDragLeave}
+          onDrop={workspaceMode ? undefined : (e) => handleDrop(e, tool.id)}
           onDragEnd={handleDragEnd}
+          moveToSideLabel="Move to Top Row"
         />
       ))}
 
@@ -450,10 +470,11 @@ export const ToolPicker = memo(function ToolPicker({
                   onMoveToBottom={() => onMoveToBottom(tool.id)}
                   onMoveToSide={() => onMoveToSide(tool.id)}
                   onDragStart={(e) => handleDragStart(e, tool.id)}
-                  onDragOver={(e) => handleDragOver(e, tool.id)}
-                  onDragLeave={handleDragLeave}
-                  onDrop={(e) => handleDrop(e, tool.id)}
+                  onDragOver={workspaceMode ? undefined : (e) => handleDragOver(e, tool.id)}
+                  onDragLeave={workspaceMode ? undefined : handleDragLeave}
+                  onDrop={workspaceMode ? undefined : (e) => handleDrop(e, tool.id)}
                   onDragEnd={handleDragEnd}
+                  moveToSideLabel="Move to Top Row"
                 />
               ))}
             </div>

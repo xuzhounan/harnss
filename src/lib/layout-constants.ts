@@ -14,6 +14,19 @@ export const WINDOWS_FRAME_BUFFER_WIDTH = 16;
 export const MIN_RIGHT_PANEL_WIDTH = 200;
 export const MIN_TOOLS_PANEL_WIDTH = 280;
 
+/** Per-tool preferred pixel widths — used as default when a tool has no remembered width. */
+export const TOOL_PREFERRED_WIDTHS: Record<string, number> = {
+  terminal: 480,
+  browser: 560,
+  git: 360,
+  files: 320,
+  "project-files": 320,
+  mcp: 380,
+};
+
+/** Fallback preferred width for tools not in the map. */
+export const DEFAULT_TOOL_PREFERRED_WIDTH = 380;
+
 export const MIN_BOTTOM_TOOLS_HEIGHT = 120;
 export const MAX_BOTTOM_TOOLS_HEIGHT = 600;
 export const DEFAULT_BOTTOM_TOOLS_HEIGHT = 250;

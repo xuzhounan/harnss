@@ -333,9 +333,6 @@ export function useAppOrchestrator() {
   // Reorder panel tools in the ToolPicker (moves fromId to toId's position)
   const handleToolReorder = useCallback(
     (fromId: ToolId, toId: ToolId) => {
-      const count = settings.toolOrder.filter(
-        (id) => settings.activeTools.has(id) && COLUMN_TOOL_IDS.has(id),
-      ).length;
       settings.setToolOrder((prev) => {
         const next = [...prev];
         const fromIdx = next.indexOf(fromId);
@@ -345,11 +342,6 @@ export function useAppOrchestrator() {
         next.splice(toIdx, 0, fromId);
         return next;
       });
-      // Reset split ratios to equal when reordering (positional, not keyed)
-      if (count > 1) {
-        settings.setToolsSplitRatios(new Array<number>(count).fill(1 / count));
-        settings.saveToolsSplitRatios();
-      }
     },
     [settings],
   );
