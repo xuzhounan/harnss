@@ -65,13 +65,13 @@ const TOOL_TINTS: Record<string, { idle: string; hover: string; active: string }
   agents:          { idle: "text-indigo-600/70 dark:text-indigo-200/50",    hover: "hover:text-indigo-600/90 dark:hover:text-indigo-200/70",   active: "text-indigo-600 dark:text-indigo-200/90" },
 };
 
-interface ToolDef {
+export interface ToolDef {
   id: ToolId;
   label: string;
   icon: typeof Terminal;
 }
 
-const PANEL_TOOLS_MAP: Record<string, ToolDef> = {
+export const PANEL_TOOLS_MAP: Record<string, ToolDef> = {
   terminal: { id: "terminal", label: "Terminal", icon: Terminal },
   browser: { id: "browser", label: "Browser", icon: Globe },
   git: { id: "git", label: "Source Control", icon: GitBranch },
@@ -98,6 +98,10 @@ interface ToolPickerProps {
   availableContextual?: Set<ToolId>;
   /** Display order of panel tools — drives render order and drag reordering */
   toolOrder: ToolId[];
+  /** Optional transient drag-preview order rendered instead of the persisted order. */
+  displayToolOrder?: ToolId[];
+  /** Optional transient drag-preview bottom placement set. */
+  displayBottomTools?: ReadonlySet<ToolId>;
   onReorder: (fromId: ToolId, toId: ToolId) => void;
   /** Current project directory — enables "Open in Editor" button */
   projectPath?: string;
@@ -132,9 +136,9 @@ function ToolButton({
   onClick: () => void;
 }) {
   const Icon = tool.icon;
-  const buttonSize = islandLayout ? "h-9 w-9" : "h-10 w-10";
-  const iconSize = islandLayout ? "h-4 w-4" : "h-[18px] w-[18px]";
-  const radius = islandLayout ? "rounded-lg" : "rounded-[10px]";
+  const buttonSize = islandLayout ? "h-8 w-8" : "h-8 w-8";
+  const iconSize = islandLayout ? "h-4 w-4" : "h-4 w-4";
+  const radius = islandLayout ? "rounded-lg" : "rounded-lg";
   const tint = coloredIcons ? TOOL_TINTS[tool.id] : undefined;
 
   return (
@@ -273,6 +277,8 @@ export const ToolPicker = memo(function ToolPicker({
   onToggle,
   availableContextual,
   toolOrder,
+  displayToolOrder,
+  displayBottomTools,
   onReorder,
   projectPath,
   bottomTools,
@@ -287,8 +293,17 @@ export const ToolPicker = memo(function ToolPicker({
 
   // Panel tools ordered by toolOrder, falling back to map for unknown ids
   const orderedPanelTools = useMemo(
-    () => toolOrder.filter((id) => id in PANEL_TOOLS_MAP).map((id) => PANEL_TOOLS_MAP[id]),
-    [toolOrder],
+    () => (displayToolOrder ?? toolOrder).filter((id) => id in PANEL_TOOLS_MAP).map((id) => PANEL_TOOLS_MAP[id]),
+    [displayToolOrder, toolOrder],
+  );
+  const effectiveBottomTools = displayBottomTools ?? bottomTools;
+  const sidePanelTools = useMemo(
+    () => orderedPanelTools.filter((tool) => !effectiveBottomTools.has(tool.id)),
+    [effectiveBottomTools, orderedPanelTools],
+  );
+  const bottomPanelTools = useMemo(
+    () => orderedPanelTools.filter((tool) => effectiveBottomTools.has(tool.id)),
+    [effectiveBottomTools, orderedPanelTools],
   );
 
   // Track which button is being dragged over for visual feedback
@@ -346,13 +361,13 @@ export const ToolPicker = memo(function ToolPicker({
   );
 
   const pickerClassName = islandLayout
-    ? `tool-picker ${transparentBackground ? "" : "island "}relative flex h-full shrink-0 flex-col items-center gap-1${transparentBackground ? "" : " rounded-[var(--island-radius)] bg-background"} pt-2.5 pb-2.5`
-    : `tool-picker ${transparentBackground ? "" : "island "}relative flex h-full w-14 shrink-0 flex-col items-center gap-1.5${transparentBackground ? "" : " rounded-lg bg-background"} pt-3 pb-3`;
+    ? `tool-picker ${transparentBackground ? "" : "island "}relative flex h-full shrink-0 flex-col items-center gap-0.5${transparentBackground ? "" : " rounded-[var(--island-radius)] bg-background"} pt-2 pb-2`
+    : `tool-picker ${transparentBackground ? "" : "island "}relative flex h-full w-11 shrink-0 flex-col items-center gap-0.5${transparentBackground ? "" : " rounded-lg bg-background"} pt-2 pb-2`;
   const pickerStyle = islandLayout ? { width: "var(--tool-picker-strip-width)" } : undefined;
 
-  const editorButtonSize = islandLayout ? "h-9 w-9" : "h-10 w-10";
-  const editorIconSize = islandLayout ? "h-4 w-4" : "h-[18px] w-[18px]";
-  const editorRadius = islandLayout ? "rounded-lg" : "rounded-[10px]";
+  const editorButtonSize = islandLayout ? "h-8 w-8" : "h-8 w-8";
+  const editorIconSize = islandLayout ? "h-4 w-4" : "h-4 w-4";
+  const editorRadius = islandLayout ? "rounded-lg" : "rounded-lg";
 
   return (
     <div className={pickerClassName} style={pickerStyle}>
@@ -365,7 +380,7 @@ export const ToolPicker = memo(function ToolPicker({
             const hasTaskProgress = tool.id === "tasks" && taskProgress && taskProgress.total > 0;
             const progressFraction = hasTaskProgress ? taskProgress.completed / taskProgress.total : 0;
             const isComplete = hasTaskProgress ? taskProgress.completed === taskProgress.total : false;
-            const ringSize = islandLayout ? 36 : 40;
+            const ringSize = 32;
 
             return (
               <div key={tool.id} className="relative">
@@ -388,81 +403,108 @@ export const ToolPicker = memo(function ToolPicker({
             );
           })}
           {/* Divider between contextual and panel tools */}
-          <div className={`my-0.5 ${islandLayout ? "w-5" : "w-6"}`}>
+          <div className="my-0.5 w-5">
             <div className="h-px w-full bg-foreground/[0.08]" />
           </div>
         </>
       )}
 
       {/* Panel tools — draggable, reorderable, with right-click placement menu */}
-      {orderedPanelTools.map((tool) => {
-        const isInBottom = bottomTools.has(tool.id);
-        return (
-          <PanelToolWithMenu
-            key={tool.id}
-            tool={tool}
-            isActive={activeTools.has(tool.id)}
-            coloredIcons={coloredIcons}
-            islandLayout={islandLayout}
-            isDragTarget={dragOverId === tool.id && draggingId !== tool.id}
-            isBottom={isInBottom}
-            onToggle={() => onToggle(tool.id)}
-            onMoveToBottom={() => onMoveToBottom(tool.id)}
-            onMoveToSide={() => onMoveToSide(tool.id)}
-            onDragStart={(e) => handleDragStart(e, tool.id)}
-            onDragOver={(e) => handleDragOver(e, tool.id)}
-            onDragLeave={handleDragLeave}
-            onDrop={(e) => handleDrop(e, tool.id)}
-            onDragEnd={handleDragEnd}
-          />
-        );
-      })}
+      {sidePanelTools.map((tool) => (
+        <PanelToolWithMenu
+          key={tool.id}
+          tool={tool}
+          isActive={activeTools.has(tool.id)}
+          coloredIcons={coloredIcons}
+          islandLayout={islandLayout}
+          isDragTarget={dragOverId === tool.id && draggingId !== tool.id}
+          isBottom={false}
+          onToggle={() => onToggle(tool.id)}
+          onMoveToBottom={() => onMoveToBottom(tool.id)}
+          onMoveToSide={() => onMoveToSide(tool.id)}
+          onDragStart={(e) => handleDragStart(e, tool.id)}
+          onDragOver={(e) => handleDragOver(e, tool.id)}
+          onDragLeave={handleDragLeave}
+          onDrop={(e) => handleDrop(e, tool.id)}
+          onDragEnd={handleDragEnd}
+        />
+      ))}
 
-      {/* Open project in preferred editor — pushed to the bottom */}
-      {projectPath && (
-        <div className="mt-auto flex w-full flex-col items-center">
-          {/* Subtle top divider */}
-          <div className={`mb-1.5 ${islandLayout ? "w-5" : "w-6"}`}>
-            <div className="h-px w-full bg-foreground/[0.06]" />
+      <div className="mt-auto flex w-full flex-col items-center">
+        {bottomPanelTools.length > 0 && (
+          <>
+            <div className="mb-1 w-5">
+              <div className="h-px w-full bg-foreground/[0.08]" />
+            </div>
+            <div className="flex w-full flex-col items-center gap-0.5">
+              {bottomPanelTools.map((tool) => (
+                <PanelToolWithMenu
+                  key={tool.id}
+                  tool={tool}
+                  isActive={activeTools.has(tool.id)}
+                  coloredIcons={coloredIcons}
+                  islandLayout={islandLayout}
+                  isDragTarget={dragOverId === tool.id && draggingId !== tool.id}
+                  isBottom={true}
+                  onToggle={() => onToggle(tool.id)}
+                  onMoveToBottom={() => onMoveToBottom(tool.id)}
+                  onMoveToSide={() => onMoveToSide(tool.id)}
+                  onDragStart={(e) => handleDragStart(e, tool.id)}
+                  onDragOver={(e) => handleDragOver(e, tool.id)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={(e) => handleDrop(e, tool.id)}
+                  onDragEnd={handleDragEnd}
+                />
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* Open project in preferred editor — pinned under bottom-docked tools */}
+        {projectPath && (
+          <div className="mt-1.5 flex w-full flex-col items-center">
+            <div className="mb-1 w-5">
+              <div className="h-px w-full bg-foreground/[0.06]" />
+            </div>
+            {/* Only allow closing via onOpenChange — opening is handled by our contextMenu handler
+                so that left-click goes straight to the editor without showing the menu */}
+            <DropdownMenu open={editorMenuOpen} onOpenChange={(open) => { if (!open) setEditorMenuOpen(false); }}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={handleOpenInEditor}
+                      onContextMenu={handleEditorContextMenu}
+                      className={`tool-picker-btn group/btn relative mx-auto flex ${editorButtonSize} items-center justify-center ${editorRadius} p-0 transition-all duration-200 cursor-pointer text-foreground/30 hover:text-foreground/60 hover:bg-foreground/[0.05] active:scale-[0.92]`}
+                    >
+                      <SquareArrowOutUpRight
+                        className={`${editorIconSize} transition-transform duration-200 group-hover/btn:scale-110`}
+                        strokeWidth={1.5}
+                      />
+                    </button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="left" sideOffset={10}>
+                  <p className="text-xs font-medium">Open in Editor</p>
+                  <p className="text-[10px] text-background/50">Right-click for options</p>
+                </TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent side="left" align="end" sideOffset={10}>
+                <DropdownMenuItem onClick={() => handleOpenWithEditor("cursor")}>
+                  Cursor
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleOpenWithEditor("code")}>
+                  VS Code
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleOpenWithEditor("zed")}>
+                  Zed
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
-          {/* Only allow closing via onOpenChange — opening is handled by our contextMenu handler
-              so that left-click goes straight to the editor without showing the menu */}
-          <DropdownMenu open={editorMenuOpen} onOpenChange={(open) => { if (!open) setEditorMenuOpen(false); }}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={handleOpenInEditor}
-                    onContextMenu={handleEditorContextMenu}
-                    className={`tool-picker-btn group/btn relative mx-auto flex ${editorButtonSize} items-center justify-center ${editorRadius} p-0 transition-all duration-200 cursor-pointer text-foreground/30 hover:text-foreground/60 hover:bg-foreground/[0.05] active:scale-[0.92]`}
-                  >
-                    <SquareArrowOutUpRight
-                      className={`${editorIconSize} transition-transform duration-200 group-hover/btn:scale-110`}
-                      strokeWidth={1.5}
-                    />
-                  </button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="left" sideOffset={10}>
-                <p className="text-xs font-medium">Open in Editor</p>
-                <p className="text-[10px] text-background/50">Right-click for options</p>
-              </TooltipContent>
-            </Tooltip>
-            <DropdownMenuContent side="left" align="end" sideOffset={10}>
-              <DropdownMenuItem onClick={() => handleOpenWithEditor("cursor")}>
-                Cursor
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleOpenWithEditor("code")}>
-                VS Code
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleOpenWithEditor("zed")}>
-                Zed
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 });

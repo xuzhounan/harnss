@@ -29,7 +29,7 @@ export function PanelHeader({
   label,
   children,
   separator = true,
-  className = "px-3 pt-2.5 pb-1.5",
+  className = "px-3 py-2",
   iconClass = "text-muted-foreground",
 }: PanelHeaderProps) {
   return (

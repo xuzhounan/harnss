@@ -81,6 +81,7 @@ interface ProjectFilesPanelProps {
   cwd?: string;
   enabled: boolean;
   onPreviewFile?: (filePath: string, sourceRect: DOMRect) => void;
+  headerControls?: React.ReactNode;
 }
 
 // ── Component ──
@@ -89,6 +90,7 @@ export const ProjectFilesPanel = memo(function ProjectFilesPanel({
   cwd,
   enabled,
   onPreviewFile,
+  headerControls,
 }: ProjectFilesPanelProps) {
   const { tree, loading, error, refresh } = useProjectFiles(cwd, enabled);
 
@@ -190,7 +192,9 @@ export const ProjectFilesPanel = memo(function ProjectFilesPanel({
   if (!cwd) {
     return (
       <div className="flex h-full flex-col">
-        <PanelHeader icon={FolderTree} label="Project Files" iconClass="text-teal-600/70 dark:text-teal-200/50" />
+        <PanelHeader icon={FolderTree} label="Project Files" iconClass="text-teal-600/70 dark:text-teal-200/50">
+          {headerControls}
+        </PanelHeader>
         <div className="flex flex-1 flex-col items-center justify-center gap-1">
           <FolderTree className="h-3.5 w-3.5 text-foreground/15" />
           <p className="text-[10px] text-foreground/30">No project selected</p>
@@ -215,6 +219,7 @@ export const ProjectFilesPanel = memo(function ProjectFilesPanel({
         >
           <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
         </button>
+        {headerControls}
       </PanelHeader>
 
       {/* Search bar */}

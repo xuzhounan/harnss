@@ -12,6 +12,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { PanelHeader } from "@/components/PanelHeader";
 import { useMcpServers } from "@/hooks/useMcpServers";
 import type { McpTransport, McpServerConfig, McpServerStatus, McpServerStatusState } from "@/types";
 
@@ -49,9 +50,10 @@ interface McpPanelProps {
   onRefreshStatus?: () => void;
   onReconnect?: (name: string) => Promise<void> | void;
   onRestartWithServers?: (servers: McpServerConfig[]) => Promise<void> | void;
+  headerControls?: React.ReactNode;
 }
 
-export const McpPanel = memo(function McpPanel({ projectId, runtimeStatuses, isPreliminary, hasLiveSession, onRefreshStatus, onReconnect, onRestartWithServers }: McpPanelProps) {
+export const McpPanel = memo(function McpPanel({ projectId, runtimeStatuses, isPreliminary, hasLiveSession, onRefreshStatus, onReconnect, onRestartWithServers, headerControls }: McpPanelProps) {
   const { servers, loading, addServer, removeServer } = useMcpServers(projectId);
   const [reconnectingName, setReconnectingName] = useState<string | null>(null);
   const [authenticatingName, setAuthenticatingName] = useState<string | null>(null);
@@ -199,11 +201,16 @@ export const McpPanel = memo(function McpPanel({ projectId, runtimeStatuses, isP
 
   if (!projectId) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-foreground/[0.03]">
-          <Plug className="h-5 w-5 text-foreground/15" />
+      <div className="flex h-full flex-col">
+        <PanelHeader icon={Plug} label="MCP Servers" iconClass="text-violet-600/70 dark:text-violet-200/50">
+          {headerControls}
+        </PanelHeader>
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-foreground/[0.03]">
+            <Plug className="h-5 w-5 text-foreground/15" />
+          </div>
+          <p className="text-[11px] text-muted-foreground/45">Open a project to manage MCP servers</p>
         </div>
-        <p className="text-[11px] text-muted-foreground/45">Open a project to manage MCP servers</p>
       </div>
     );
   }
@@ -251,6 +258,7 @@ export const McpPanel = memo(function McpPanel({ projectId, runtimeStatuses, isP
           >
             <Plus className="h-3.5 w-3.5" />
           </Button>
+          {headerControls}
         </div>
       </div>
       {/* Header separator */}

@@ -19,8 +19,8 @@ export const MAX_BOTTOM_TOOLS_HEIGHT = 600;
 export const DEFAULT_BOTTOM_TOOLS_HEIGHT = 250;
 
 // Includes the picker strip itself plus the gap that separates it from the tools column.
-export const TOOL_PICKER_WIDTH_ISLAND = 58;
-export const TOOL_PICKER_WIDTH_FLAT = 56;
+export const TOOL_PICKER_WIDTH_ISLAND = 48;
+export const TOOL_PICKER_WIDTH_FLAT = 44;
 
 export const RESIZE_HANDLE_WIDTH_ISLAND = ISLAND_PANEL_GAP;
 export const RESIZE_HANDLE_WIDTH_FLAT = 1;

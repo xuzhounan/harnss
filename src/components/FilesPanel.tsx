@@ -26,6 +26,7 @@ interface FilesPanelProps {
   activeEngine?: EngineId;
   onScrollToToolCall?: (messageId: string) => void;
   enabled?: boolean;
+  headerControls?: React.ReactNode;
 }
 
 export const FilesPanel = memo(function FilesPanel({
@@ -35,6 +36,7 @@ export const FilesPanel = memo(function FilesPanel({
   activeEngine,
   onScrollToToolCall,
   enabled = true,
+  headerControls,
 }: FilesPanelProps) {
   const [hasClaudeMd, setHasClaudeMd] = useState(false);
   const [data, setData] = useState<FilePanelData | null>(null);
@@ -117,6 +119,7 @@ export const FilesPanel = memo(function FilesPanel({
         {files.length > 0 && (
           <span className="text-[10px] tabular-nums text-foreground/35">{files.length}</span>
         )}
+        {headerControls}
       </PanelHeader>
 
       {enabled && !data ? (

@@ -33,6 +33,8 @@ interface TabBarProps<T extends TabBarTab> {
   inactiveClass?: string;
   /** Optional drag-reorder handler. */
   onReorderTabs?: (fromTabId: string, toTabId: string) => void;
+  /** Optional actions rendered before the new-tab button. */
+  headerActions?: React.ReactNode;
 }
 
 export function TabBar<T extends TabBarTab>({
@@ -48,6 +50,7 @@ export function TabBar<T extends TabBarTab>({
   activeClass = "bg-foreground/[0.08] text-foreground/90",
   inactiveClass = "text-foreground/40 hover:text-foreground/60 hover:bg-foreground/[0.04]",
   onReorderTabs,
+  headerActions,
 }: TabBarProps<T>) {
   const hasHeaderLabel = headerLabel.trim().length > 0;
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
@@ -146,6 +149,12 @@ export function TabBar<T extends TabBarTab>({
           );
         })}
       </div>
+
+      {headerActions && (
+        <div className="flex shrink-0 items-center gap-0.5">
+          {headerActions}
+        </div>
+      )}
 
       {/* New tab button */}
       <Button

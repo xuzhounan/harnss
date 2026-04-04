@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Terminal as TerminalIcon, Plus, X, Loader2 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { PanelHeader } from "@/components/PanelHeader";
 import type { TerminalTab } from "@/hooks/useSpaceTerminals";
 import type { ResolvedTheme } from "@/hooks/useTheme";
 
@@ -74,6 +75,7 @@ interface ToolsPanelProps {
   onEnsureTerminal: () => Promise<void>;
   onCloseTerminal: (tabId: string) => Promise<void>;
   resolvedTheme: ResolvedTheme;
+  headerControls?: React.ReactNode;
 }
 
 export function ToolsPanel({
@@ -86,6 +88,7 @@ export function ToolsPanel({
   onEnsureTerminal,
   onCloseTerminal,
   resolvedTheme,
+  headerControls,
 }: ToolsPanelProps) {
   const handleCreateTerminal = () => {
     if (!terminalsReady) return Promise.resolve();
@@ -102,7 +105,14 @@ export function ToolsPanel({
   const hasTabs = tabs.length > 0;
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full flex-col">
+      <PanelHeader icon={TerminalIcon} label="Terminal" iconClass="text-emerald-600/70 dark:text-emerald-200/50">
+        {hasTabs && (
+          <span className="text-[10px] tabular-nums text-foreground/35">{tabs.length}</span>
+        )}
+        {headerControls}
+      </PanelHeader>
+      <div className="flex min-h-0 flex-1">
       {/* ── Terminal viewport ── */}
       <div className="relative min-h-0 min-w-0 flex-1">
         {tabs.map((tab) => (
@@ -210,6 +220,7 @@ export function ToolsPanel({
           </div>
         </>
       )}
+      </div>
     </div>
   );
 }

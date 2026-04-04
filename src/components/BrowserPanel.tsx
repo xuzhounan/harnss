@@ -62,11 +62,19 @@ interface DevToolsOpenOptions {
 type BrowserColorScheme = "light" | "dark";
 
 interface BrowserPanelProps {
+  persistKey: string;
   onElementGrab?: (element: GrabbedElement) => void;
+  headerControls?: React.ReactNode;
 }
 
 const BROWSER_HISTORY_KEY = "harnss-browser-history";
+const BROWSER_SESSION_KEY_PREFIX = "harnss-browser-session:";
 const MAX_BROWSER_HISTORY = 100;
+
+interface PersistedBrowserSession {
+  tabs: BrowserTab[];
+  activeTabId: string | null;
+}
 
 function getDefaultBrowserColorScheme(): BrowserColorScheme {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -87,6 +95,50 @@ function normalizeHistoryTitle(raw: string | undefined, url: string): string {
     return parsed.hostname;
   } catch {
     return url;
+  }
+}
+
+function getBrowserSessionStorageKey(persistKey: string): string {
+  return `${BROWSER_SESSION_KEY_PREFIX}${persistKey}`;
+}
+
+function readBrowserSession(persistKey: string): PersistedBrowserSession {
+  try {
+    const raw = localStorage.getItem(getBrowserSessionStorageKey(persistKey));
+    if (!raw) {
+      return { tabs: [], activeTabId: null };
+    }
+    const parsed = JSON.parse(raw) as {
+      tabs?: Array<Partial<BrowserTab>>;
+      activeTabId?: unknown;
+    };
+    if (!Array.isArray(parsed.tabs)) {
+      return { tabs: [], activeTabId: null };
+    }
+
+    const tabs: BrowserTab[] = parsed.tabs.flatMap((tab) => {
+      if (!tab || typeof tab !== "object") return [];
+      if (typeof tab.id !== "string" || tab.id.trim().length === 0) return [];
+      if (typeof tab.url !== "string") return [];
+      const title = typeof tab.title === "string" && tab.title.trim().length > 0 ? tab.title : "New Tab";
+      return [{
+        id: tab.id,
+        url: tab.url,
+        title,
+        label: typeof tab.label === "string" && tab.label.trim().length > 0 ? tab.label : title,
+        isLoading: Boolean(tab.isLoading),
+        colorScheme: tab.colorScheme === "light" ? "light" : "dark",
+        isStartPage: Boolean(tab.isStartPage),
+      }];
+    });
+
+    const activeTabId = typeof parsed.activeTabId === "string" && tabs.some((tab) => tab.id === parsed.activeTabId)
+      ? parsed.activeTabId
+      : tabs[0]?.id ?? null;
+
+    return { tabs, activeTabId };
+  } catch {
+    return { tabs: [], activeTabId: null };
   }
 }
 
@@ -124,9 +176,9 @@ const BrowserHeaderIcon = forwardRef<SVGSVGElement, React.ComponentPropsWithoutR
   ),
 );
 
-export function BrowserPanel({ onElementGrab }: BrowserPanelProps) {
-  const [tabs, setTabs] = useState<BrowserTab[]>([]);
-  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+export function BrowserPanel({ persistKey, onElementGrab, headerControls }: BrowserPanelProps) {
+  const [tabs, setTabs] = useState<BrowserTab[]>(() => readBrowserSession(persistKey).tabs);
+  const [activeTabId, setActiveTabId] = useState<string | null>(() => readBrowserSession(persistKey).activeTabId);
   const [inspectMode, setInspectMode] = useState(false);
   const [emptyInput, setEmptyInput] = useState("");
   const [showEmptySuggestions, setShowEmptySuggestions] = useState(false);
@@ -165,6 +217,26 @@ export function BrowserPanel({ onElementGrab }: BrowserPanelProps) {
       /* ignore localStorage errors */
     }
   }, [history]);
+
+  useEffect(() => {
+    const session = readBrowserSession(persistKey);
+    setTabs(session.tabs);
+    setActiveTabId(session.activeTabId);
+    setInspectMode(false);
+    setEmptyInput("");
+    setShowEmptySuggestions(false);
+  }, [persistKey]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(getBrowserSessionStorageKey(persistKey), JSON.stringify({
+        tabs,
+        activeTabId,
+      }));
+    } catch {
+      /* ignore localStorage errors */
+    }
+  }, [activeTabId, persistKey, tabs]);
 
   const addHistoryEntry = useCallback((raw: string, title?: string) => {
     const normalized = normalizeHistoryUrl(raw);
@@ -278,6 +350,7 @@ export function BrowserPanel({ onElementGrab }: BrowserPanelProps) {
         activeClass="bg-foreground/[0.08] text-foreground/80"
         inactiveClass="text-foreground/35 hover:text-foreground/55 hover:bg-foreground/[0.04]"
         onReorderTabs={reorderTabs}
+        headerActions={headerControls}
       />
 
       {/* Webview content */}
