@@ -24,8 +24,8 @@ describe("layout constants", () => {
   });
 
   it("uses the shared wider chat input width class", () => {
-    expect(BOTTOM_CHAT_MAX_WIDTH_CLASS).toBe("max-w-[61.5rem]");
-    expect(CHAT_INPUT_MAX_WIDTH_CLASS).toBe("max-w-[61.5rem]");
+    expect(BOTTOM_CHAT_MAX_WIDTH_CLASS).toBe("max-w-[52.5rem]");
+    expect(CHAT_INPUT_MAX_WIDTH_CLASS).toBe("max-w-[52.5rem]");
     expect(CHAT_INPUT_MAX_WIDTH_CLASS).toBe(BOTTOM_CHAT_MAX_WIDTH_CLASS);
   });
 
@@ -36,10 +36,10 @@ describe("layout constants", () => {
     expect(ISLAND_LAYOUT_MARGIN).toBe(12);
     expect(ISLAND_RADIUS).toBe(12);
     expect(ISLAND_CONTROL_RADIUS).toBe(11);
-    expect(TOOL_PICKER_WIDTH_ISLAND).toBe(58);
+    expect(TOOL_PICKER_WIDTH_ISLAND).toBe(48);
     expect(RESIZE_HANDLE_WIDTH_ISLAND).toBe(4);
     expect(WINDOWS_FRAME_BUFFER_WIDTH).toBe(16);
-    expect(getBootstrapMinWindowWidth("darwin")).toBe(1542);
-    expect(getBootstrapMinWindowWidth("win32")).toBe(1558);
+    expect(getBootstrapMinWindowWidth("darwin")).toBe(1532);
+    expect(getBootstrapMinWindowWidth("win32")).toBe(1548);
   });
 });
