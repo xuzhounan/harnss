@@ -265,6 +265,8 @@ declare global {
         snapshot: (terminalId: string) => Promise<{
           output?: string;
           seq?: number;
+          cols?: number;
+          rows?: number;
           exited?: boolean;
           exitCode?: number | null;
           error?: string;
