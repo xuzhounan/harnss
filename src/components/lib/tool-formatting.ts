@@ -1,7 +1,7 @@
 import type { UIMessage, SubagentToolStep } from "@/types";
 import { getMcpCompactSummary } from "@/components/McpToolContent";
-import { getTodoItems } from "@/lib/todo-utils";
-import { getDistinctPatchPaths, getStructuredPatches } from "@/lib/patch-utils";
+import { getTodoItems } from "@/lib/chat/todo-utils";
+import { getDistinctPatchPaths, getStructuredPatches } from "@/lib/diff/patch-utils";
 
 // ── Compact summary for collapsed tool line ──
 
@@ -197,6 +197,13 @@ export function formatInput(input: Record<string, unknown>): string {
     return String(input.command);
   }
   return JSON.stringify(input, null, 2);
+}
+
+/** Strip ANSI escape sequences (colors, cursor, reverse-video, etc.) from terminal output. */
+export function stripAnsi(text: string): string {
+  // Matches: ESC[ ... letter  |  ESC] ... ST  |  ESC(single char)
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b[()][A-Z0-9]|\x1b[A-Z@-_]/g, "");
 }
 
 export function formatBashResult(result: UIMessage["toolResult"]): string {

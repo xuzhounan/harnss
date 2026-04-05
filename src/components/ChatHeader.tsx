@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { ChevronDown, Info, Loader2, PanelLeft } from "lucide-react";
+import { ChevronDown, Info, Loader2, PanelLeft, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -22,6 +22,7 @@ const ACP_PERMISSION_BEHAVIOR_LABELS: Record<AcpPermissionBehavior, string> = {
 interface ChatHeaderProps {
   islandLayout: boolean;
   sidebarOpen: boolean;
+  showSidebarToggle?: boolean;
   isProcessing: boolean;
   model?: string;
   sessionId?: string;
@@ -35,11 +36,14 @@ interface ChatHeaderProps {
   showDevFill?: boolean;
   onSeedDevExampleConversation?: () => void;
   onSeedDevExampleSpaceData?: () => void;
+  /** Close this split pane (renders an X button on the right). */
+  onClosePane?: () => void;
 }
 
 export const ChatHeader = memo(function ChatHeader({
   islandLayout,
   sidebarOpen,
+  showSidebarToggle = true,
   isProcessing,
   model,
   sessionId,
@@ -53,6 +57,7 @@ export const ChatHeader = memo(function ChatHeader({
   showDevFill,
   onSeedDevExampleConversation,
   onSeedDevExampleSpaceData,
+  onClosePane,
 }: ChatHeaderProps) {
   const modeLabel = permissionMode ? PERMISSION_MODE_LABELS[permissionMode] : null;
   const acpBehaviorLabel = acpPermissionBehavior
@@ -60,6 +65,8 @@ export const ChatHeader = memo(function ChatHeader({
     : null;
   const permissionDisplay = acpBehaviorLabel ?? modeLabel;
   const macIslandTitlebarOffsetClass = islandLayout && isMac ? "translate-y-0.5" : "";
+  const shouldShowSidebarToggle = showSidebarToggle && !sidebarOpen;
+  const shouldReserveSidebarInset = shouldShowSidebarToggle && isMac;
 
   // Collect all session detail rows for the unified tooltip
   const detailRows: { label: string; value: string }[] = [];
@@ -77,10 +84,10 @@ export const ChatHeader = memo(function ChatHeader({
       className={`chat-header pointer-events-auto drag-region flex items-center gap-3 ${
         islandLayout ? "h-8 px-3" : "h-[3.25rem] px-4"
       } ${
-        !sidebarOpen && isMac ? (islandLayout ? "ps-[78px]" : "ps-[84px]") : ""
+        shouldReserveSidebarInset ? (islandLayout ? "ps-[78px]" : "ps-[84px]") : ""
       }`}
     >
-      {!sidebarOpen && (
+      {shouldShowSidebarToggle && (
         <Button
           variant="ghost"
           size="icon"
@@ -138,9 +145,26 @@ export const ChatHeader = memo(function ChatHeader({
         </span>
       ) : null}
 
-      {/* Session info — subtle icon, hover reveals model / permissions / cost / session ID */}
-      {(showDevSeedButton || hasDetails) && (
+      {/* Session info, split view toggle, and pane close */}
+      {(showDevSeedButton || hasDetails || onClosePane) && (
         <div className="ms-auto flex items-center gap-1.5">
+          {onClosePane && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="no-drag h-6 w-6 text-muted-foreground/40 hover:text-foreground/60"
+                  onClick={onClosePane}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                Close pane
+              </TooltipContent>
+            </Tooltip>
+          )}
           {showDevSeedButton && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

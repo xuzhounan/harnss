@@ -1,5 +1,5 @@
 import { memo, useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { Plus, Settings, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, Settings, ChevronLeft, ChevronRight, Trash2, Pencil } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -10,23 +10,30 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
-import { Pencil, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  Popover,
+  PopoverContent,
+  PopoverAnchor,
+} from "@/components/ui/popover";
 import { resolveLucideIcon } from "@/lib/icon-utils";
+import { SpaceCustomizer } from "./SpaceCustomizer";
 import type { Space } from "@/types";
 
 interface SpaceBarProps {
   spaces: Space[];
   activeSpaceId: string;
   onSelectSpace: (id: string) => void;
-  onCreateSpace: () => void;
-  onEditSpace: (space: Space) => void;
+  onStartCreateSpace: () => void;
+  onUpdateSpace: (id: string, updates: Partial<Pick<Space, "name" | "icon" | "iconType" | "color">>) => void;
   onDeleteSpace: (id: string) => void;
   onDropProject?: (projectId: string, spaceId: string) => void;
   onOpenSettings?: () => void;
+  /** When non-null, a draft space is active — disable the + button */
+  draftSpace?: Space | null;
 }
 
-function SpaceIcon({ space, size = 18 }: { space: Space; size?: number }) {
+export function SpaceIcon({ space, size = 18 }: { space: Space; size?: number }) {
   if (space.iconType === "emoji") {
     return <span style={{ fontSize: size - 2 }}>{space.icon}</span>;
   }
@@ -52,20 +59,59 @@ export const SpaceBar = memo(function SpaceBar({
   spaces,
   activeSpaceId,
   onSelectSpace,
-  onCreateSpace,
-  onEditSpace,
+  onStartCreateSpace,
+  onUpdateSpace,
   onDeleteSpace,
   onDropProject,
   onOpenSettings,
+  draftSpace,
 }: SpaceBarProps) {
+  const isCreatingSpace = draftSpace != null;
   const sorted = [...spaces].sort((a, b) => a.order - b.order);
   const [contextSpace, setContextSpace] = useState<Space | null>(null);
   const [contextPos, setContextPos] = useState({ x: 0, y: 0 });
   const [dragOverSpaceId, setDragOverSpaceId] = useState<string | null>(null);
-  // Space pending deletion — shown in confirmation dialog
   const [deleteSpace, setDeleteSpace] = useState<Space | null>(null);
 
-  // Scroll overflow detection for arrow buttons
+  // ── Popover for editing existing spaces ──
+  const [editingSpaceId, setEditingSpaceId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const spaceButtonRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const anchorRef = useRef<HTMLDivElement>(null);
+
+  const editingSpace = editingSpaceId
+    ? spaces.find((s) => s.id === editingSpaceId) ?? null
+    : null;
+
+  const openEditPopover = useCallback((space: Space) => {
+    setEditingSpaceId(space.id);
+    setEditName(space.name);
+  }, []);
+
+  const closeEditPopover = useCallback(() => {
+    if (editingSpaceId && editName.trim()) {
+      const current = spaces.find((s) => s.id === editingSpaceId);
+      if (current && editName.trim() !== current.name) {
+        onUpdateSpace(editingSpaceId, { name: editName.trim() });
+      }
+    }
+    setEditingSpaceId(null);
+  }, [editingSpaceId, editName, spaces, onUpdateSpace]);
+
+  useEffect(() => {
+    if (!editingSpaceId || !anchorRef.current) return;
+    const btn = spaceButtonRefs.current.get(editingSpaceId);
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    const anchor = anchorRef.current;
+    anchor.style.position = "fixed";
+    anchor.style.left = `${rect.left + rect.width / 2}px`;
+    anchor.style.top = `${rect.top}px`;
+    anchor.style.width = "1px";
+    anchor.style.height = "1px";
+  }, [editingSpaceId, spaces]);
+
+  // Scroll overflow detection
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
@@ -73,7 +119,6 @@ export const SpaceBar = memo(function SpaceBar({
   const updateScrollState = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    // 1px tolerance for sub-pixel rounding
     setCanScrollLeft(el.scrollLeft > 1);
     setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
   }, []);
@@ -91,12 +136,10 @@ export const SpaceBar = memo(function SpaceBar({
     };
   }, [updateScrollState, sorted.length]);
 
-  // Scroll by one space button width (2rem + gap)
   const scrollByOne = useCallback((direction: -1 | 1) => {
     scrollRef.current?.scrollBy({ left: direction * 36, behavior: "smooth" });
   }, []);
 
-  // Gradient mask fades out edge icons when more content is scrollable
   const fadeMask = useMemo<React.CSSProperties>(() => {
     const FADE = "20px";
     if (canScrollLeft && canScrollRight) {
@@ -121,7 +164,7 @@ export const SpaceBar = memo(function SpaceBar({
 
   return (
     <div className="no-drag grid grid-cols-[2rem_1fr_2rem] items-end px-2 pt-1.5">
-      {/* Settings gear — mirrors the + button on the right */}
+      {/* Settings gear */}
       <Tooltip>
         <TooltipTrigger asChild>
           <button
@@ -135,11 +178,9 @@ export const SpaceBar = memo(function SpaceBar({
           Settings
         </TooltipContent>
       </Tooltip>
-      {/* Center group — flex row: [◂] [masked scroll area] [▸].
-           Arrows sit outside the scroll container so they never cover icons.
-           The mask fades edge icons to hint at more content. */}
+
+      {/* Center — scrollable space icons */}
       <div className="group/spaces flex min-w-0 items-end">
-        {/* Left arrow — hidden until hover, only when scrollable left */}
         {canScrollLeft && (
           <button
             onClick={() => scrollByOne(-1)}
@@ -162,7 +203,12 @@ export const SpaceBar = memo(function SpaceBar({
                 <Tooltip key={space.id}>
                   <TooltipTrigger asChild>
                     <button
+                      ref={(el) => {
+                        if (el) spaceButtonRefs.current.set(space.id, el);
+                        else spaceButtonRefs.current.delete(space.id);
+                      }}
                       onClick={() => onSelectSpace(space.id)}
+                      onDoubleClick={() => openEditPopover(space)}
                       onContextMenu={(e) => handleContextMenu(e, space)}
                       onDragOver={(e) => {
                         e.preventDefault();
@@ -202,7 +248,6 @@ export const SpaceBar = memo(function SpaceBar({
           </div>
         </div>
 
-        {/* Right arrow — hidden until hover, only when scrollable right */}
         {canScrollRight && (
           <button
             onClick={() => scrollByOne(1)}
@@ -213,12 +258,13 @@ export const SpaceBar = memo(function SpaceBar({
         )}
       </div>
 
-      {/* + on far right */}
+      {/* + button — enters draft creation mode in sidebar */}
       <Tooltip>
         <TooltipTrigger asChild>
           <button
-            onClick={onCreateSpace}
-            className="mb-1.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-sidebar-foreground/40 transition-all hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
+            onClick={onStartCreateSpace}
+            disabled={isCreatingSpace}
+            className="mb-1.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-sidebar-foreground/40 transition-all hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10 disabled:opacity-30 disabled:pointer-events-none"
           >
             <Plus className="h-4.5 w-4.5" />
           </button>
@@ -228,9 +274,42 @@ export const SpaceBar = memo(function SpaceBar({
         </TooltipContent>
       </Tooltip>
 
-      {/* Right-click context menu (positioned at cursor) */}
+      {/* ── Edit popover (for existing spaces) ── */}
+      <Popover
+        open={editingSpaceId !== null}
+        onOpenChange={(open) => {
+          if (!open) closeEditPopover();
+        }}
+      >
+        <PopoverAnchor ref={anchorRef} className="pointer-events-none" />
+        <PopoverContent
+          side="top"
+          sideOffset={12}
+          align="center"
+          className="w-72"
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
+          {editingSpace && (
+            <SpaceCustomizer
+              icon={editingSpace.icon}
+              iconType={editingSpace.iconType}
+              color={editingSpace.color}
+              onUpdateIcon={(ic, it) => onUpdateSpace(editingSpace.id, { icon: ic, iconType: it })}
+              onUpdateColor={(c) => onUpdateSpace(editingSpace.id, { color: c })}
+              editMode={{
+                name: editName,
+                onUpdateName: setEditName,
+                onDelete: editingSpace.id !== "default"
+                  ? () => { setDeleteSpace(editingSpace); setEditingSpaceId(null); }
+                  : undefined,
+              }}
+            />
+          )}
+        </PopoverContent>
+      </Popover>
+
+      {/* Right-click context menu */}
       <DropdownMenu open={!!contextSpace} onOpenChange={(open) => !open && closeContext()}>
-        {/* Invisible anchor at cursor position */}
         <div
           className="fixed"
           style={{ left: contextPos.x, top: contextPos.y, width: 1, height: 1 }}
@@ -246,7 +325,7 @@ export const SpaceBar = memo(function SpaceBar({
             transform: "translateY(-100%)",
           }}
         >
-          <DropdownMenuItem onClick={() => { if (contextSpace) onEditSpace(contextSpace); closeContext(); }}>
+          <DropdownMenuItem onClick={() => { if (contextSpace) openEditPopover(contextSpace); closeContext(); }}>
             <Pencil className="me-2 h-3.5 w-3.5" />
             Edit
           </DropdownMenuItem>

@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { UIMessage } from "@/types";
 import { useChatPersistedState } from "@/components/chat-ui-state";
+import { CHAT_CARD_ROW_MARGIN_CLASS, CHAT_PROSE_EDGE_CLASS } from "@/components/lib/chat-layout";
 
 const REMARK_PLUGINS = [remarkGfm];
 
@@ -48,7 +49,7 @@ export const SummaryBlock = memo(function SummaryBlock({ message }: SummaryBlock
   const fallbackLabel = isCompact ? "Context compacted" : "Context resumed from previous conversation";
 
   return (
-    <div className="flow-root mx-4 my-2">
+    <div className={`flow-root ${CHAT_CARD_ROW_MARGIN_CLASS}`}>
       <button
         type="button"
         onClick={() => hasContent && setIsOpen((prev) => !prev)}
@@ -78,7 +79,7 @@ export const SummaryBlock = memo(function SummaryBlock({ message }: SummaryBlock
       </button>
       {isOpen && hasContent && (
         <div className="mt-1 rounded-lg border border-border/30 bg-muted/20 px-4 py-3">
-          <div className="prose dark:prose-invert prose-sm max-w-none text-muted-foreground wrap-break-word">
+          <div className={`prose dark:prose-invert prose-sm max-w-none text-muted-foreground wrap-break-word ${CHAT_PROSE_EDGE_CLASS}`}>
             <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>
               {message.content}
             </ReactMarkdown>

@@ -17,25 +17,31 @@ interface PreloadGlobals {
   localStorage?: PreloadStorage;
 }
 
+import type { ThemeOption as ThemeSource, MacBackgroundEffect } from "@shared/types/settings";
+
+function readStoredThemeSource(storage: PreloadStorage | undefined): ThemeSource {
+  const stored = storage?.getItem("harnss-theme");
+  return stored === "light" || stored === "dark" || stored === "system"
+    ? stored
+    : "dark";
+}
+
 // Early setup wrapped in try/catch so contextBridge.exposeInMainWorld always runs
 // even if DOM isn't ready or something else fails above it.
 try {
   const globals = globalThis as typeof globalThis & PreloadGlobals;
   const root = globals.document?.documentElement;
+  const themeSource = readStoredThemeSource(globals.localStorage);
 
   // Apply platform + glass classes as early as possible (before React mounts).
   // On Windows, glass support does not mean the user has transparency enabled.
   root?.classList.add(`platform-${process.platform}`);
-  ipcRenderer.invoke("app:getGlassSupported").then((supported: boolean) => {
-    if (!supported || !root) return;
-
-    const transparencySetting = globals.localStorage?.getItem("harnss-transparency") ?? null;
-    const transparencyEnabled = transparencySetting === null || transparencySetting === "true";
-
-    if (transparencyEnabled) {
-      root.classList.add("glass-enabled");
-    }
-  });
+  ipcRenderer.send("app:set-theme-source", themeSource);
+  const transparencyEnabled = (globals.localStorage?.getItem("harnss-transparency") ?? null) !== "false";
+  const canUseTransparentWindow = process.platform === "darwin" || process.platform === "win32";
+  if (canUseTransparentWindow && transparencyEnabled) {
+    root?.classList.add("glass-enabled");
+  }
 
   // Push stored theme to main process early so glass appearance is correct
   // before React mounts. Default to "dark" to match useSettings, which falls
@@ -52,6 +58,10 @@ try {
 
 contextBridge.exposeInMainWorld("claude", {
   getGlassSupported: () => ipcRenderer.invoke("app:getGlassSupported"),
+  getMacBackgroundEffectSupport: () => ipcRenderer.invoke("app:get-mac-background-effect-support"),
+  setThemeSource: (themeSource: ThemeSource) => ipcRenderer.send("app:set-theme-source", themeSource),
+  setMacBackgroundEffect: (effect: MacBackgroundEffect) => ipcRenderer.send("app:set-mac-background-effect", effect),
+  relaunchApp: () => ipcRenderer.invoke("app:relaunch"),
   setMinWidth: (width: number) => ipcRenderer.send("app:set-min-width", width),
   glass: {
     setTintColor: (tintColor: string | null) =>
@@ -111,9 +121,16 @@ contextBridge.exposeInMainWorld("claude", {
   restartSession: (sessionId: string, mcpServers?: unknown[], cwd?: string, effort?: string, model?: string) =>
     ipcRenderer.invoke("claude:restart-session", { sessionId, mcpServers, cwd, effort, model }),
   readFile: (filePath: string) => ipcRenderer.invoke("file:read", filePath),
+  renameFile: (oldPath: string, newPath: string) => ipcRenderer.invoke("file:rename", { oldPath, newPath }),
+  trashItem: (filePath: string) => ipcRenderer.invoke("file:trash", filePath),
+  newFile: (filePath: string) => ipcRenderer.invoke("file:new-file", filePath),
+  newFolder: (folderPath: string) => ipcRenderer.invoke("file:new-folder", folderPath),
   writeClipboardText: (text: string) => ipcRenderer.invoke("clipboard:write-text", text),
+  setBrowserColorScheme: (targetWebContentsId: number, colorScheme: "light" | "dark") =>
+    ipcRenderer.invoke("browser:set-color-scheme", { targetWebContentsId, colorScheme }),
   openInEditor: (filePath: string, line?: number, editor?: string) => ipcRenderer.invoke("file:open-in-editor", { filePath, line, editor }),
   openExternal: (url: string) => ipcRenderer.invoke("shell:open-external", url),
+  showItemInFolder: (filePath: string) => ipcRenderer.invoke("shell:show-item-in-folder", filePath),
   generateTitle: (message: string, cwd?: string, engine?: string, sessionId?: string) =>
     ipcRenderer.invoke("claude:generate-title", { message, cwd, engine, sessionId }),
   projects: {
@@ -132,6 +149,15 @@ contextBridge.exposeInMainWorld("claude", {
     list: (projectId: string) => ipcRenderer.invoke("sessions:list", projectId),
     delete: (projectId: string, sessionId: string) => ipcRenderer.invoke("sessions:delete", projectId, sessionId),
     search: (projectIds: string[], query: string) => ipcRenderer.invoke("sessions:search", { projectIds, query }),
+    updateMeta: (projectId: string, sessionId: string, patch: { pinned?: boolean; folderId?: string | null; branch?: string }) =>
+      ipcRenderer.invoke("sessions:update-meta", { projectId, sessionId, patch }),
+  },
+  folders: {
+    list: (projectId: string) => ipcRenderer.invoke("folders:list", projectId),
+    create: (projectId: string, name: string) => ipcRenderer.invoke("folders:create", { projectId, name }),
+    delete: (projectId: string, folderId: string) => ipcRenderer.invoke("folders:delete", { projectId, folderId }),
+    rename: (projectId: string, folderId: string, name: string) => ipcRenderer.invoke("folders:rename", { projectId, folderId, name }),
+    pin: (projectId: string, folderId: string, pinned: boolean) => ipcRenderer.invoke("folders:pin", { projectId, folderId, pinned }),
   },
   spaces: {
     list: () => ipcRenderer.invoke("spaces:list"),
@@ -200,6 +226,8 @@ contextBridge.exposeInMainWorld("claude", {
   acp: {
     log: (label: string, data: unknown) => ipcRenderer.send("acp:log", label, data),
     start: (options: { agentId: string; cwd: string; mcpServers?: unknown[] }) => ipcRenderer.invoke("acp:start", options),
+    authenticate: (sessionId: string, methodId: string) =>
+      ipcRenderer.invoke("acp:authenticate", { sessionId, methodId }),
     prompt: (sessionId: string, text: string, images?: unknown[]) =>
       ipcRenderer.invoke("acp:prompt", { sessionId, text, images }),
     stop: (sessionId: string) => ipcRenderer.invoke("acp:stop", sessionId),
@@ -297,10 +325,16 @@ contextBridge.exposeInMainWorld("claude", {
       ipcRenderer.invoke("agents:update-cached-config", agentId, configOptions),
     checkBinaries: (agents: Array<{ id: string; binary: Record<string, { cmd: string; args?: string[] }> }>) =>
       ipcRenderer.invoke("agents:check-binaries", agents),
+    getPlatformKeys: () => ipcRenderer.invoke("agents:get-platform-keys"),
   },
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
     set: (patch: Record<string, unknown>) => ipcRenderer.invoke("settings:set", patch),
+    onChanged: (callback: (data: unknown) => void) => {
+      const listener = (_event: IpcRendererEvent, data: unknown) => callback(data);
+      ipcRenderer.on("settings:changed", listener);
+      return () => ipcRenderer.removeListener("settings:changed", listener);
+    },
   },
   jira: {
     getConfig: (projectId: string) => ipcRenderer.invoke("jira:get-config", projectId),
@@ -361,5 +395,15 @@ contextBridge.exposeInMainWorld("claude", {
     install: () => ipcRenderer.invoke("updater:install"),
     check: () => ipcRenderer.invoke("updater:check"),
     currentVersion: () => ipcRenderer.invoke("updater:current-version") as Promise<string>,
+    isPreRelease: () => ipcRenderer.invoke("updater:is-prerelease") as Promise<{
+      isPreRelease: boolean;
+      version: string;
+      releaseUrl: string | null;
+    }>,
+    onPreReleaseStatus: (cb: (info: unknown) => void) => {
+      const listener = (_event: IpcRendererEvent, info: unknown) => cb(info);
+      ipcRenderer.on("updater:prerelease-status", listener);
+      return () => ipcRenderer.removeListener("updater:prerelease-status", listener);
+    },
   },
 });

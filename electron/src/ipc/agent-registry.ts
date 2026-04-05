@@ -6,8 +6,10 @@ import {
   loadUserAgents,
   updateCachedConfig,
   checkBinaries,
+  getRegistryPlatformKeys,
 } from "../lib/agent-registry";
 import type { InstalledAgent } from "../lib/agent-registry";
+import type { ACPConfigOption } from "@shared/types/acp";
 
 export function register(): void {
   loadUserAgents();
@@ -21,7 +23,7 @@ export function register(): void {
     deleteAgent(id);
     return { ok: true };
   });
-  ipcMain.handle("agents:update-cached-config", (_e, agentId: string, configOptions: unknown[]) => {
+  ipcMain.handle("agents:update-cached-config", (_e, agentId: string, configOptions: ACPConfigOption[]) => {
     updateCachedConfig(agentId, configOptions);
     return { ok: true };
   });
@@ -32,4 +34,5 @@ export function register(): void {
     (_e, agents: Array<{ id: string; binary: Record<string, { cmd: string; args?: string[] }> }>) =>
       checkBinaries(agents),
   );
+  ipcMain.handle("agents:get-platform-keys", () => getRegistryPlatformKeys());
 }

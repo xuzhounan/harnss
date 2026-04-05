@@ -1,6 +1,5 @@
 import { memo, startTransition, useMemo, useCallback, useEffect, useState } from "react";
 import { FileText, Loader2 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PanelHeader } from "@/components/PanelHeader";
@@ -17,7 +16,7 @@ import {
   computeFilePanelData,
   getCachedFilePanelData,
   type FilePanelData,
-} from "@/lib/session-derived-data";
+} from "@/lib/session/derived-data";
 import type { EngineId, UIMessage } from "@/types";
 
 interface FilesPanelProps {
@@ -27,6 +26,7 @@ interface FilesPanelProps {
   activeEngine?: EngineId;
   onScrollToToolCall?: (messageId: string) => void;
   enabled?: boolean;
+  headerControls?: React.ReactNode;
 }
 
 export const FilesPanel = memo(function FilesPanel({
@@ -36,6 +36,7 @@ export const FilesPanel = memo(function FilesPanel({
   activeEngine,
   onScrollToToolCall,
   enabled = true,
+  headerControls,
 }: FilesPanelProps) {
   const [hasClaudeMd, setHasClaudeMd] = useState(false);
   const [data, setData] = useState<FilePanelData | null>(null);
@@ -114,33 +115,25 @@ export const FilesPanel = memo(function FilesPanel({
 
   return (
     <div className="flex h-full flex-col">
-      <PanelHeader icon={FileText} label="Open Files" separator={false} className="h-10 shrink-0 px-3" iconClass="text-amber-600/70 dark:text-amber-200/50">
+      <PanelHeader icon={FileText} label="Open Files" iconClass="text-amber-600/70 dark:text-amber-200/50">
         {files.length > 0 && (
-          <Badge variant="secondary" className="h-5 rounded-full px-2 text-[10px] font-semibold tabular-nums">
-            {files.length}
-          </Badge>
+          <span className="text-[10px] tabular-nums text-foreground/35">{files.length}</span>
         )}
+        {headerControls}
       </PanelHeader>
 
-      {/* Gradient separator below header */}
-      <div className="mx-2">
-        <div className="h-px bg-gradient-to-r from-foreground/[0.04] via-foreground/[0.08] to-foreground/[0.04]" />
-      </div>
-
       {enabled && !data ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-2.5 p-4">
-          <Loader2 className="h-4 w-4 animate-spin text-foreground/20" />
-          <p className="text-center text-[11px] text-muted-foreground/50">
-            Indexing files...
+        <div className="flex flex-1 flex-col items-center justify-center gap-1 p-4">
+          <Loader2 className="h-3 w-3 animate-spin text-foreground/25" />
+          <p className="text-center text-[10px] text-muted-foreground/40">
+            Indexing…
           </p>
         </div>
       ) : files.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-foreground/[0.03]">
-            <FileText className="h-5 w-5 text-foreground/15" />
-          </div>
-          <p className="text-center text-[11px] leading-relaxed text-muted-foreground/45">
-            Files accessed during this session<br />will appear here
+        <div className="flex flex-1 flex-col items-center justify-center gap-1.5 p-6">
+          <FileText className="h-4 w-4 text-foreground/15" />
+          <p className="text-center text-[10px] leading-relaxed text-muted-foreground/40">
+            Accessed files will appear here
           </p>
         </div>
       ) : (
@@ -156,12 +149,10 @@ export const FilesPanel = memo(function FilesPanel({
               return (
                 <div
                   key={file.path}
-                  className="group flex w-full items-center gap-2.5 px-3 py-1.5 text-start transition-all duration-150 hover:bg-foreground/[0.04] cursor-pointer"
+                  className="group flex w-full items-center gap-2 px-3 py-1 text-start transition-colors hover:bg-foreground/[0.04] cursor-pointer"
                   onClick={() => handleClick(file.path)}
                 >
-                  <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-foreground/[0.03] transition-colors duration-150 group-hover:bg-foreground/[0.06]">
-                    <Icon className={`h-3 w-3 ${color}`} strokeWidth={1.75} />
-                  </div>
+                  <Icon className={`h-3 w-3 shrink-0 ${color}`} strokeWidth={1.75} />
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <div className="min-w-0 flex-1">

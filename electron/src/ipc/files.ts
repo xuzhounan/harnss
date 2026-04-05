@@ -273,6 +273,68 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
     }
   });
 
+  ipcMain.handle("shell:show-item-in-folder", async (_event, filePath: string) => {
+    try {
+      shell.showItemInFolder(filePath);
+      return { ok: true };
+    } catch (err) {
+      const errMsg = reportError("SHELL:SHOW_ITEM_ERR", err, { filePath });
+      return { error: errMsg };
+    }
+  });
+
+  ipcMain.handle("file:rename", async (_event, { oldPath, newPath }: { oldPath: string; newPath: string }) => {
+    try {
+      // Ensure target doesn't already exist
+      if (fs.existsSync(newPath)) {
+        return { error: "A file or folder with that name already exists" };
+      }
+      await fsPromises.rename(oldPath, newPath);
+      return { ok: true };
+    } catch (err) {
+      const errMsg = reportError("FILE:RENAME_ERR", err, { oldPath, newPath });
+      return { error: errMsg };
+    }
+  });
+
+  ipcMain.handle("file:trash", async (_event, filePath: string) => {
+    try {
+      await shell.trashItem(filePath);
+      return { ok: true };
+    } catch (err) {
+      const errMsg = reportError("FILE:TRASH_ERR", err, { filePath });
+      return { error: errMsg };
+    }
+  });
+
+  ipcMain.handle("file:new-file", async (_event, filePath: string) => {
+    try {
+      if (fs.existsSync(filePath)) {
+        return { error: "A file with that name already exists" };
+      }
+      // Ensure parent directory exists
+      await fsPromises.mkdir(path.dirname(filePath), { recursive: true });
+      await fsPromises.writeFile(filePath, "", "utf-8");
+      return { ok: true };
+    } catch (err) {
+      const errMsg = reportError("FILE:NEW_FILE_ERR", err, { filePath });
+      return { error: errMsg };
+    }
+  });
+
+  ipcMain.handle("file:new-folder", async (_event, folderPath: string) => {
+    try {
+      if (fs.existsSync(folderPath)) {
+        return { error: "A folder with that name already exists" };
+      }
+      await fsPromises.mkdir(folderPath, { recursive: true });
+      return { ok: true };
+    } catch (err) {
+      const errMsg = reportError("FILE:NEW_FOLDER_ERR", err, { folderPath });
+      return { error: errMsg };
+    }
+  });
+
   ipcMain.handle("files:list", async (_event, cwd: string) => {
     try {
       const files = await listProjectFiles(cwd);

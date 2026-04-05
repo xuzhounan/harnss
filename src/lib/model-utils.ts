@@ -24,6 +24,23 @@ function modelValue(model: ModelInfo): string {
   return model.value.trim().toLowerCase();
 }
 
+function getEquivalentModels(
+  model: string | null | undefined,
+  supportedModels: ModelInfo[],
+): ModelInfo[] {
+  return supportedModels.filter((entry) => areModelsEquivalent(entry.value, model));
+}
+
+function getFamilyMatches(
+  model: string | null | undefined,
+  supportedModels: ModelInfo[],
+): ModelInfo[] {
+  const target = normalizeModelId(model);
+  const family = modelFamily(target);
+  if (!target || family === "other") return [];
+  return supportedModels.filter((entry) => modelFamily(modelValue(entry)) === family);
+}
+
 function modelPreferenceScore(candidate: ModelInfo, target: string): number {
   const value = modelValue(candidate);
   const label = modelLabel(candidate);
@@ -64,10 +81,15 @@ export function areModelsEquivalent(a: string | null | undefined, b: string | nu
  */
 export function resolveModelValue(model: string | null | undefined, supportedModels: ModelInfo[]): string | undefined {
   if (!model) return undefined;
-  const target = model.trim().toLowerCase();
+  const target = normalizeModelId(model);
+
+  const exact = supportedModels.find((entry) => modelValue(entry) === target);
+  if (exact) {
+    return exact.value;
+  }
 
   // First prefer equivalent aliases (e.g. default <-> claude-opus-*).
-  const equivalents = supportedModels.filter((m) => areModelsEquivalent(m.value, model));
+  const equivalents = getEquivalentModels(model, supportedModels);
   if (equivalents.length > 0) {
     const preferred = [...equivalents].sort(
       (a, b) => modelPreferenceScore(b, target) - modelPreferenceScore(a, target),
@@ -75,7 +97,23 @@ export function resolveModelValue(model: string | null | undefined, supportedMod
     return preferred.value;
   }
 
-  // Fallback: exact match for truly custom/non-equivalent IDs.
-  const exact = supportedModels.find((m) => m.value === model);
-  return exact?.value;
+  // Fallback for stale caches: prefer the closest match within the same model family.
+  const familyMatches = getFamilyMatches(model, supportedModels);
+  if (familyMatches.length > 0) {
+    const preferred = [...familyMatches].sort(
+      (a, b) => modelPreferenceScore(b, target) - modelPreferenceScore(a, target),
+    )[0];
+    return preferred.value;
+  }
+
+  return undefined;
+}
+
+export function findEquivalentModel(
+  model: string | null | undefined,
+  supportedModels: ModelInfo[],
+): ModelInfo | undefined {
+  const resolved = resolveModelValue(model, supportedModels);
+  if (!resolved) return undefined;
+  return supportedModels.find((entry) => entry.value === resolved);
 }

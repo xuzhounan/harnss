@@ -1,9 +1,9 @@
 import { execSync } from "child_process";
-import { app, BrowserWindow, clipboard, globalShortcut, ipcMain, Menu, nativeTheme, session, shell, systemPreferences } from "electron";
+import { app, BrowserWindow, clipboard, globalShortcut, ipcMain, Menu, nativeTheme, session, shell, systemPreferences, webContents } from "electron";
 import path from "path";
 import http from "http";
 import contextMenu from "electron-context-menu";
-import { getBootstrapMinWindowWidth } from "../../src/lib/layout-constants";
+import { getBootstrapMinWindowWidth } from "../../src/lib/layout/constants";
 
 // Packaged .app bundles launched from Finder get a minimal PATH (/usr/bin:/bin).
 // Inherit the user's shell PATH so child processes (SDK's `node`, git, etc.) resolve.
@@ -23,16 +23,18 @@ import { log } from "./lib/logger";
 import { reportError } from "./lib/error-utils";
 import { migrateFromOpenAcpUi } from "./lib/migration";
 import { glassEnabled, applyGlass, setGlassTint } from "./lib/glass";
+import { getAppSettings } from "./lib/app-settings";
 import { initAutoUpdater, getIsInstallingUpdate } from "./lib/updater";
+import { initPreReleaseCheck } from "./lib/prerelease-check";
 import { initPostHog, shutdownPostHog, reinitPostHog, captureEvent } from "./lib/posthog";
-import { sessions } from "./ipc/claude-sessions";
-import { acpSessions, getAcpAnalyticsPropertiesForSession } from "./ipc/acp-sessions";
+import { getAcpAnalyticsPropertiesForSession } from "./ipc/acp-sessions";
 import { terminals } from "./ipc/terminal";
 
 // IPC module registrations
 import * as spacesIpc from "./ipc/spaces";
 import * as projectsIpc from "./ipc/projects";
 import * as sessionsIpc from "./ipc/sessions";
+import * as foldersIpc from "./ipc/folders";
 import * as ccImportIpc from "./ipc/cc-import";
 import * as filesIpc from "./ipc/files";
 import * as claudeSessionsIpc from "./ipc/claude-sessions";
@@ -61,6 +63,60 @@ if (glassEnabled) {
 
 let mainWindow: BrowserWindow | null = null;
 
+import type { ThemeOption, MacBackgroundEffect as SharedMacBackgroundEffect } from "@shared/types/settings";
+
+/** In main process, "off" is never applied — it resolves to vibrancy or liquid-glass before use. */
+type MacBackgroundEffect = Exclude<SharedMacBackgroundEffect, "off">;
+
+let pendingMacBackgroundEffect: MacBackgroundEffect = "liquid-glass";
+
+function normalizeThemeSource(value: unknown): ThemeOption {
+  return value === "light" || value === "dark" || value === "system"
+    ? value
+    : "system";
+}
+
+function normalizeMacBackgroundEffect(value: unknown): MacBackgroundEffect {
+  return value === "vibrancy" ? "vibrancy" : "liquid-glass";
+}
+
+function getMacBackgroundEffectSupport(): { liquidGlass: boolean; vibrancy: boolean } {
+  return {
+    liquidGlass: glassEnabled,
+    vibrancy: process.platform === "darwin",
+  };
+}
+
+function resolveMacBackgroundEffect(effect: MacBackgroundEffect): MacBackgroundEffect {
+  const support = getMacBackgroundEffectSupport();
+  if (effect === "liquid-glass" && !support.liquidGlass) {
+    return "vibrancy";
+  }
+  return effect;
+}
+
+function applyMacBackgroundEffect(effect: MacBackgroundEffect): void {
+  if (process.platform !== "darwin" || !mainWindow || mainWindow.isDestroyed()) return;
+
+  const resolved = resolveMacBackgroundEffect(effect);
+  pendingMacBackgroundEffect = resolved;
+
+  if (resolved === "vibrancy") {
+    mainWindow.setVibrancy("under-window", { animationDuration: 120 });
+    return;
+  }
+
+  mainWindow.setVibrancy(null);
+  if (!glassEnabled || mainWindow.webContents.isLoadingMainFrame()) return;
+
+  const glassId = applyGlass(mainWindow.getNativeWindowHandle());
+  if (glassId === -1) {
+    log("GLASS", "addView returned -1 — native addon failed, glass will not be visible");
+  } else {
+    log("GLASS", `Liquid glass applied, viewId=${glassId}`);
+  }
+}
+
 function getMainWindow(): BrowserWindow | null {
   return mainWindow;
 }
@@ -70,6 +126,11 @@ function isMainRendererPermissionRequest(webContents: Electron.WebContents | nul
 }
 
 function createWindow(): void {
+  const initialMacBackgroundEffect: MacBackgroundEffect = resolveMacBackgroundEffect(pendingMacBackgroundEffect);
+  if (process.platform === "darwin") {
+    pendingMacBackgroundEffect = initialMacBackgroundEffect;
+  }
+
   const windowOptions: Electron.BrowserWindowConstructorOptions = {
     show: false,
     width: 1200,
@@ -90,10 +151,10 @@ function createWindow(): void {
     },
   };
 
-  if (glassEnabled) {
-    // macOS Tahoe+ with liquid glass
+  if (process.platform === "darwin") {
     windowOptions.titleBarStyle = "hidden";
     windowOptions.transparent = true;
+    windowOptions.backgroundColor = "#00000000";
     windowOptions.trafficLightPosition = { x: 19, y: 19 };
   } else if (process.platform === "win32") {
     // Windows: native Electron backgroundMaterial handles DWM mica/acrylic.
@@ -105,14 +166,21 @@ function createWindow(): void {
     // macOS without glass / Linux
     windowOptions.titleBarStyle = "hiddenInset";
     windowOptions.trafficLightPosition = { x: 19, y: 19 };
-    windowOptions.backgroundColor = "#040404";
+    windowOptions.backgroundColor = "#141414";
   }
 
   mainWindow = new BrowserWindow(windowOptions);
+  if (process.platform === "darwin") applyMacBackgroundEffect(initialMacBackgroundEffect);
 
   mainWindow.once("ready-to-show", () => {
     mainWindow?.show();
   });
+
+  if (process.platform === "darwin") {
+    mainWindow.on("focus", () => {
+      applyMacBackgroundEffect(pendingMacBackgroundEffect);
+    });
+  }
 
   contextMenu({
     window: mainWindow,
@@ -138,23 +206,40 @@ function createWindow(): void {
     void shell.openExternal(url);
   });
 
-  if (glassEnabled) {
-    // macOS: apply liquid glass after content loads
+  if (process.platform === "darwin") {
     mainWindow.webContents.once("did-finish-load", () => {
-      const glassId = applyGlass(mainWindow!.getNativeWindowHandle());
-      if (glassId === -1) {
-        log("GLASS", "addView returned -1 — native addon failed, glass will not be visible");
-      } else {
-        log("GLASS", `Liquid glass applied, viewId=${glassId}`);
-      }
+      applyMacBackgroundEffect(pendingMacBackgroundEffect);
     });
-
   }
 }
 
 // Renderer uses this to decide whether the transparency toggle is available.
 ipcMain.handle("app:getGlassSupported", () => {
-  return !!(glassEnabled || process.platform === "win32");
+  return process.platform === "darwin" || process.platform === "win32";
+});
+
+ipcMain.handle("app:get-mac-background-effect-support", () => {
+  return getMacBackgroundEffectSupport();
+});
+
+ipcMain.on("app:set-theme-source", (_event, themeSource: unknown) => {
+  nativeTheme.themeSource = normalizeThemeSource(themeSource);
+});
+
+ipcMain.on("app:set-mac-background-effect", (_event, effect: unknown) => {
+  const normalized = normalizeMacBackgroundEffect(effect);
+  pendingMacBackgroundEffect = normalized;
+  applyMacBackgroundEffect(normalized);
+});
+
+ipcMain.handle("app:relaunch", () => {
+  try {
+    app.relaunch();
+    app.quit();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: reportError("APP_RELAUNCH", err) };
+  }
 });
 
 ipcMain.handle("clipboard:write-text", (_event, text: string) => {
@@ -163,6 +248,37 @@ ipcMain.handle("clipboard:write-text", (_event, text: string) => {
     return { ok: true };
   } catch (err) {
     return { ok: false, error: reportError("CLIPBOARD_WRITE", err) };
+  }
+});
+
+ipcMain.handle("browser:set-color-scheme", async (_event, payload: { targetWebContentsId: number; colorScheme: "light" | "dark" }) => {
+  try {
+    const targetId = payload?.targetWebContentsId;
+    const colorScheme = payload?.colorScheme;
+
+    if (!Number.isInteger(targetId)) {
+      return { ok: false, error: "Invalid target webContents id" };
+    }
+    if (colorScheme !== "light" && colorScheme !== "dark") {
+      return { ok: false, error: "Invalid browser color scheme" };
+    }
+
+    const target = webContents.fromId(targetId);
+    if (!target || target.isDestroyed()) {
+      return { ok: false, error: "Browser target is unavailable" };
+    }
+
+    if (!target.debugger.isAttached()) {
+      target.debugger.attach("1.3");
+    }
+
+    await target.debugger.sendCommand("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-color-scheme", value: colorScheme }],
+    });
+
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: reportError("BROWSER_COLOR_SCHEME", err) };
   }
 });
 
@@ -209,6 +325,7 @@ ipcMain.on("glass:set-theme", (_event, theme: string) => {
 spacesIpc.register();
 projectsIpc.register(getMainWindow);
 sessionsIpc.register();
+foldersIpc.register();
 ccImportIpc.register();
 filesIpc.register(getMainWindow);
 claudeSessionsIpc.register(getMainWindow);
@@ -219,7 +336,7 @@ agentRegistryIpc.register();
 acpSessionsIpc.register(getMainWindow);
 codexSessionsIpc.register(getMainWindow);
 mcpIpc.register();
-settingsIpc.register();
+settingsIpc.register(getMainWindow);
 jiraIpc.register();
 
 // Listen for analytics settings changes and reinitialize PostHog
@@ -335,9 +452,15 @@ ipcMain.handle("speech:request-mic-permission", async () => {
 app.whenReady().then(() => {
   // Migrate data from old "OpenACP UI" app directory before anything reads it
   migrateFromOpenAcpUi();
+  if (process.platform === "darwin") {
+    pendingMacBackgroundEffect = resolveMacBackgroundEffect(
+      normalizeMacBackgroundEffect(getAppSettings().macBackgroundEffect),
+    );
+  }
 
   createWindow();
   initAutoUpdater(getMainWindow);
+  initPreReleaseCheck(getMainWindow);
 
   // Initialize PostHog analytics (if enabled in settings) — fire-and-forget to avoid blocking startup
   initPostHog().catch((err) => {
@@ -403,22 +526,8 @@ app.on("will-quit", (event) => {
 });
 
 app.on("window-all-closed", () => {
-  for (const [sessionId, session] of sessions) {
-    log("CLEANUP", `Closing session ${sessionId.slice(0, 8)}`);
-    // Mark as stopping so event loops suppress expected teardown errors
-    session.stopping = true;
-    session.channel.close();
-    session.queryHandle?.close();
-  }
-  sessions.clear();
-
-  for (const [sessionId, entry] of acpSessions) {
-    log("CLEANUP", `Stopping ACP session ${sessionId.slice(0, 8)}`);
-    entry.process?.kill();
-  }
-  acpSessions.clear();
-
-  log("CLEANUP", "Stopping all Codex sessions");
+  claudeSessionsIpc.stopAll();
+  acpSessionsIpc.stopAll();
   codexSessionsIpc.stopAll();
 
   for (const [terminalId, term] of terminals) {

@@ -90,3 +90,79 @@ export interface ACPTurnCompleteEvent {
   stopReason: string;
   usage?: { inputTokens?: number; outputTokens?: number } | null;
 }
+
+export interface ACPAuthEnvVar {
+  name: string;
+  label?: string | null;
+  optional?: boolean;
+  secret?: boolean;
+}
+
+interface ACPAuthMethodBase {
+  id: string;
+  name: string;
+  description?: string | null;
+}
+
+export interface ACPAuthMethodAgent extends ACPAuthMethodBase {
+  type?: "agent";
+}
+
+export interface ACPAuthMethodEnvVar extends ACPAuthMethodBase {
+  type: "env_var";
+  vars: ACPAuthEnvVar[];
+  link?: string | null;
+}
+
+export interface ACPAuthMethodTerminal extends ACPAuthMethodBase {
+  type: "terminal";
+  args?: string[];
+  env?: Record<string, string>;
+}
+
+export type ACPAuthMethod =
+  | ACPAuthMethodAgent
+  | ACPAuthMethodEnvVar
+  | ACPAuthMethodTerminal;
+
+export interface ACPStatusInfo {
+  name: string;
+  status: string;
+}
+
+export interface ACPStartSuccessResult {
+  sessionId: string;
+  agentSessionId?: string;
+  agentName?: string;
+  configOptions?: ACPConfigOption[];
+  mcpStatuses?: ACPStatusInfo[];
+}
+
+export interface ACPStartAuthRequiredResult {
+  authRequired: true;
+  sessionId: string;
+  agentName?: string;
+  authMethods: ACPAuthMethod[];
+}
+
+export interface ACPStartErrorResult {
+  error?: string;
+  cancelled?: boolean;
+}
+
+export type ACPStartResult =
+  | ACPStartSuccessResult
+  | ACPStartAuthRequiredResult
+  | ACPStartErrorResult;
+
+export interface ACPAuthenticateResult {
+  ok?: boolean;
+  authRequired?: boolean;
+  sessionId?: string;
+  agentSessionId?: string;
+  agentName?: string;
+  authMethods?: ACPAuthMethod[];
+  configOptions?: ACPConfigOption[];
+  mcpStatuses?: ACPStatusInfo[];
+  error?: string;
+}

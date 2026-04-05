@@ -1,7 +1,6 @@
-import type { ChatSession, UIMessage, SessionInfo, PermissionRequest, ImageAttachment, McpServerStatus, ModelInfo, AcpPermissionBehavior, EngineId, Project, SlashCommand, ClaudeEffort, ContextUsage } from "../../types";
-import type { ACPConfigOption, ACPPermissionEvent } from "../../types/acp";
-import type { BackgroundSessionStore } from "../../lib/background-session-store";
-import { permissionModeToCodexPolicy, permissionModeToCodexSandbox } from "../../lib/codex-adapter";
+import type { ChatSession, UIMessage, SessionInfo, PermissionRequest, ImageAttachment, McpServerStatus, ModelInfo, AcpPermissionBehavior, EngineId, Project, SlashCommand, ClaudeEffort, ContextUsage, ACPConfigOption, ACPPermissionEvent } from "@/types";
+import type { BackgroundSessionStore } from "../../lib/background/session-store";
+import { permissionModeToCodexPolicy, permissionModeToCodexSandbox } from "../../lib/engine/codex-adapter";
 import type { CollaborationMode } from "../../types/codex-protocol/CollaborationMode";
 
 export const DRAFT_ID = "__draft__";
@@ -45,6 +44,22 @@ export interface QueuedMessage {
   messageId: string;
 }
 
+export interface PendingAcpDraftPrompt {
+  text: string;
+  images?: ImageAttachment[];
+  displayText?: string;
+}
+
+export interface SessionPaneBootstrap {
+  session: ChatSession;
+  initialMessages: UIMessage[];
+  initialMeta: InitialMeta | null;
+  initialPermission: PermissionRequest | null;
+  initialConfigOptions: ACPConfigOption[];
+  initialSlashCommands: SlashCommand[];
+  initialRawAcpPermission: ACPPermissionEvent | null;
+}
+
 /** Shared refs that multiple sub-hooks need to read/write */
 export interface SharedSessionRefs {
   activeSessionIdRef: React.MutableRefObject<string | null>;
@@ -68,6 +83,7 @@ export interface SharedSessionRefs {
   materializingRef: React.MutableRefObject<boolean>;
   saveTimerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
   messageQueueRef: React.MutableRefObject<Map<string, QueuedMessage[]>>;
+  pendingAcpDraftPromptRef: React.MutableRefObject<PendingAcpDraftPrompt | null>;
   acpAgentIdRef: React.MutableRefObject<string | null>;
   acpAgentSessionIdRef: React.MutableRefObject<string | null>;
   codexRawModelsRef: React.MutableRefObject<CodexModelSummary[]>;
@@ -77,6 +93,10 @@ export interface SharedSessionRefs {
   switchSessionRef: React.MutableRefObject<((id: string) => Promise<void>) | undefined>;
   onSpaceChangeRef: React.MutableRefObject<((spaceId: string) => void) | undefined>;
   acpPermissionBehaviorRef: React.MutableRefObject<AcpPermissionBehavior>;
+  /** Current git branch for the active project — set by the orchestrator. */
+  currentBranchRef: React.MutableRefObject<string | undefined>;
+  /** Split view: session IDs currently visible in extra panes. */
+  visibleSplitSessionIdsRef: React.MutableRefObject<readonly string[]>;
 }
 
 /** State setters from the orchestrator that sub-hooks need */

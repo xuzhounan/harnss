@@ -8,9 +8,7 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
-import type { TodoItem, PermissionBehavior, ModelInfo, ImageAttachment, SessionMeta, SlashCommand } from "@/types";
-import type { CodexSessionEvent, CodexServerRequest, CodexExitEvent } from "@/types/codex";
-import type { CodexTokenUsageNotification } from "@/types/codex";
+import type { TodoItem, AppPermissionBehavior, ModelInfo, ImageAttachment, SessionInfo, BackgroundSessionSnapshot, SlashCommand, CodexSessionEvent, CodexServerRequest, CodexExitEvent, CodexTokenUsageNotification } from "@/types";
 import type { CollaborationMode } from "@/types/codex-protocol/CollaborationMode";
 import type { ItemStartedNotification } from "@/types/codex-protocol/v2/ItemStartedNotification";
 import type { ItemCompletedNotification } from "@/types/codex-protocol/v2/ItemCompletedNotification";
@@ -30,9 +28,10 @@ import {
   codexItemToToolResult,
   codexPlanToTodos,
   imageAttachmentsToCodexInputs,
-} from "@/lib/codex-adapter";
+} from "@/lib/engine/codex-adapter";
 import { suppressNextSessionCompletion } from "@/lib/notification-utils";
-import { captureException } from "@/lib/analytics";
+import { captureException } from "@/lib/analytics/analytics";
+import { createSystemMessage, createUserMessage, nextId } from "@/lib/message-factory";
 import { useEngineBase } from "./useEngineBase";
 
 interface UseCodexOptions {
@@ -40,18 +39,33 @@ interface UseCodexOptions {
   sessionModel?: string;
   planModeEnabled?: boolean;
   initialMessages?: import("@/types").UIMessage[];
-  initialMeta?: SessionMeta | null;
+  initialMeta?: BackgroundSessionSnapshot | null;
   initialPermission?: import("@/types").PermissionRequest | null;
-}
-
-function nextId(prefix: string): string {
-  return `${prefix}-${crypto.randomUUID()}`;
 }
 
 function showCodexPermissionError(message: string): void {
   toast.error("Failed to respond to permission prompt", {
     description: message,
   });
+}
+
+export function upsertCodexSessionInfo(
+  prev: SessionInfo | null,
+  sessionId: string | null,
+  sessionModel: string | undefined,
+  permissionMode: string | undefined,
+): SessionInfo | null {
+  if (!prev && !sessionId) return null;
+
+  return {
+    sessionId: prev?.sessionId ?? sessionId ?? "",
+    model: prev?.model?.trim() || sessionModel?.trim() || "",
+    cwd: prev?.cwd ?? "",
+    tools: prev?.tools ?? [],
+    version: prev?.version ?? "",
+    ...(prev?.agentName ? { agentName: prev.agentName } : {}),
+    ...(permissionMode ? { permissionMode } : {}),
+  };
 }
 
 interface CodexQuestionOption {
@@ -384,13 +398,7 @@ export function useCodex({
         }
         setMessages((prev) => [
           ...prev,
-          {
-            id: nextId("err"),
-            role: "system",
-            content: errorText,
-            timestamp: Date.now(),
-            isError: true,
-          },
+          createSystemMessage(errorText, true),
         ]);
         break;
       }
@@ -533,9 +541,13 @@ export function useCodex({
           // Only keep the session in plan mode while the toggle is still enabled.
           // If the user already turned it off, just show the plan result and do not
           // re-open the synthetic ExitPlanMode gate.
-          setSessionInfo((prev) => prev
-            ? { ...prev, permissionMode: "plan" }
-            : prev,
+          setSessionInfo((prev) =>
+            upsertCodexSessionInfo(
+              prev,
+              sessionIdRef.current,
+              sessionModelRef.current,
+              "plan",
+            ),
           );
 
           setPendingPermission({
@@ -666,13 +678,7 @@ export function useCodex({
       const msg = turn.error?.message || "Turn failed";
       setMessages((prev) => [
         ...prev,
-        {
-          id: nextId("err"),
-          role: "system",
-          content: msg,
-          timestamp: Date.now(),
-          isError: true,
-        },
+        createSystemMessage(msg, true),
       ]);
     }
   }, [finalizeStreamingAssistant]);
@@ -801,6 +807,7 @@ export function useCodex({
           questions,
         },
         toolUseId: data.itemId,
+        codexRpcId: data.rpcId,
       });
       return;
     }
@@ -811,6 +818,7 @@ export function useCodex({
       toolName: isCommand ? "Bash" : "Edit",
       toolInput: isCommand ? {} : {},
       toolUseId: data.itemId,
+      codexRpcId: data.rpcId,
     });
   }, []);
 
@@ -901,26 +909,13 @@ export function useCodex({
       // Add user message to UI immediately
       setMessages((prev) => [
         ...prev,
-        {
-          id: nextId("user"),
-          role: "user",
-          content: text,
-          timestamp: Date.now(),
-          ...(images?.length ? { images } : {}),
-          ...(displayText ? { displayContent: displayText } : {}),
-        },
+        createUserMessage(text, images, displayText),
       ]);
       const ok = await sendRaw(text, images, collaborationMode);
       if (!ok) {
         setMessages((prev) => [
           ...prev,
-          {
-            id: nextId("err"),
-            role: "system",
-            content: "Unable to send message.",
-            timestamp: Date.now(),
-            isError: true,
-          },
+          createSystemMessage("Unable to send message.", true),
         ]);
       }
       return ok;
@@ -947,7 +942,7 @@ export function useCodex({
   }, [sessionId]);
 
   const respondPermission = useCallback(
-    async (behavior: PermissionBehavior, _updatedInput?: Record<string, unknown>, _newPermissionMode?: string) => {
+    async (behavior: AppPermissionBehavior, _updatedInput?: Record<string, unknown>, _newPermissionMode?: string) => {
       // Synthetic ExitPlanMode prompt (no real RPC) — just clear the prompt.
       // AppLayout's sync effect handles toggling plan mode off when
       // sessionInfo.permissionMode changes away from "plan".
@@ -961,13 +956,7 @@ export function useCodex({
             if (!model) {
               setMessages((prev) => [
                 ...prev,
-                {
-                  id: nextId("err"),
-                  role: "system",
-                  content: "Codex plan mode is enabled, but no model is selected. Select a Codex model and try again.",
-                  timestamp: Date.now(),
-                  isError: true,
-                },
+                createSystemMessage("Codex plan mode is enabled, but no model is selected. Select a Codex model and try again.", true),
               ]);
               return;
             }
@@ -987,13 +976,7 @@ export function useCodex({
           if (!model) {
             setMessages((prev) => [
               ...prev,
-              {
-                id: nextId("err"),
-                role: "system",
-                content: "Codex plan mode is enabled, but no model is selected. Select a Codex model and try again.",
-                timestamp: Date.now(),
-                isError: true,
-              },
+              createSystemMessage("Codex plan mode is enabled, but no model is selected. Select a Codex model and try again.", true),
             ]);
             return;
           }
@@ -1010,8 +993,16 @@ export function useCodex({
           const ok = await send("Implement the plan.", undefined, undefined, collaborationMode);
           if (!ok) return;
 
-          // User accepted — update sessionInfo so AppLayout's planMode sync fires
-          setSessionInfo((prev) => prev ? { ...prev, permissionMode: _newPermissionMode } : prev);
+          // Preserve the selected implementation mode so plan-mode sync and
+          // future Codex turns do not fall back to the stale pre-plan setting.
+          setSessionInfo((prev) =>
+            upsertCodexSessionInfo(
+              prev,
+              sessionId,
+              model,
+              _newPermissionMode,
+            ),
+          );
         }
         setPendingPermission(null);
         return;
@@ -1025,7 +1016,7 @@ export function useCodex({
             method: pendingPermission.toolName === "AskUserQuestion"
               ? "item/tool/requestUserInput"
               : "item/commandExecution/requestApproval",
-            rpcId: pendingPermission.requestId,
+            rpcId: pendingPermission.codexRpcId ?? pendingPermission.requestId,
             itemId: pendingPermission.toolUseId,
           }
           : null);

@@ -2,81 +2,85 @@ import { memo } from "react";
 import { SunMoon, Layout, Blend, Wrench } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { SettingRow, SettingsSelect } from "@/components/settings/shared";
-import type { ThemeOption } from "@/types";
+import { SettingRow, SettingsSelect, SettingsHeader, SettingsSection } from "@/components/settings/shared";
+import { useSettingsStore, deriveMacBackgroundEffect } from "@/stores/settings-store";
+import { isMac } from "@/lib/utils";
 
 // ── Props ──
 
 interface AppearanceSettingsProps {
-  theme: ThemeOption;
-  onThemeChange: (t: ThemeOption) => void;
-  islandLayout: boolean;
-  onIslandLayoutChange: (enabled: boolean) => void;
-  autoGroupTools: boolean;
-  onAutoGroupToolsChange: (enabled: boolean) => void;
-  avoidGroupingEdits: boolean;
-  onAvoidGroupingEditsChange: (enabled: boolean) => void;
-  autoExpandTools: boolean;
-  onAutoExpandToolsChange: (enabled: boolean) => void;
-  transparentToolPicker: boolean;
-  onTransparentToolPickerChange: (enabled: boolean) => void;
-  coloredSidebarIcons: boolean;
-  onColoredSidebarIconsChange: (enabled: boolean) => void;
-  transparency: boolean;
-  onTransparencyChange: (enabled: boolean) => void;
   /** Whether the platform supports transparency (glass/mica) */
   glassSupported: boolean;
+  macLiquidGlassSupported: boolean;
 }
 
 // ── Component ──
 
 export const AppearanceSettings = memo(function AppearanceSettings({
-  theme,
-  onThemeChange,
-  islandLayout,
-  onIslandLayoutChange,
-  autoGroupTools,
-  onAutoGroupToolsChange,
-  avoidGroupingEdits,
-  onAvoidGroupingEditsChange,
-  autoExpandTools,
-  onAutoExpandToolsChange,
-  transparentToolPicker,
-  onTransparentToolPickerChange,
-  coloredSidebarIcons,
-  onColoredSidebarIconsChange,
-  transparency,
-  onTransparencyChange,
   glassSupported,
+  macLiquidGlassSupported,
 }: AppearanceSettingsProps) {
+  // ── Read all appearance settings from the Zustand store ──
+  const theme = useSettingsStore((s) => s.theme);
+  const setTheme = useSettingsStore((s) => s.setTheme);
+  const islandLayout = useSettingsStore((s) => s.islandLayout);
+  const setIslandLayout = useSettingsStore((s) => s.setIslandLayout);
+  const islandShine = useSettingsStore((s) => s.islandShine);
+  const setIslandShine = useSettingsStore((s) => s.setIslandShine);
+  const macBackgroundEffect = useSettingsStore((s) => deriveMacBackgroundEffect(s));
+  const setMacBackgroundEffect = useSettingsStore((s) => s.setMacBackgroundEffect);
+  const autoGroupTools = useSettingsStore((s) => s.autoGroupTools);
+  const setAutoGroupTools = useSettingsStore((s) => s.setAutoGroupTools);
+  const avoidGroupingEdits = useSettingsStore((s) => s.avoidGroupingEdits);
+  const setAvoidGroupingEdits = useSettingsStore((s) => s.setAvoidGroupingEdits);
+  const autoExpandTools = useSettingsStore((s) => s.autoExpandTools);
+  const setAutoExpandTools = useSettingsStore((s) => s.setAutoExpandTools);
+  const expandEditToolCallsByDefault = useSettingsStore((s) => s.expandEditToolCallsByDefault);
+  const setExpandEditToolCallsByDefault = useSettingsStore((s) => s.setExpandEditToolCallsByDefault);
+  const showToolIcons = useSettingsStore((s) => s.showToolIcons);
+  const setShowToolIcons = useSettingsStore((s) => s.setShowToolIcons);
+  const coloredToolIcons = useSettingsStore((s) => s.coloredToolIcons);
+  const setColoredToolIcons = useSettingsStore((s) => s.setColoredToolIcons);
+  const transparentToolPicker = useSettingsStore((s) => s.transparentToolPicker);
+  const setTransparentToolPicker = useSettingsStore((s) => s.setTransparentToolPicker);
+  const coloredSidebarIcons = useSettingsStore((s) => s.coloredSidebarIcons);
+  const setColoredSidebarIcons = useSettingsStore((s) => s.setColoredSidebarIcons);
+  const transparency = useSettingsStore((s) => s.transparency);
+  const setTransparency = useSettingsStore((s) => s.setTransparency);
+
+  const onThemeChange = setTheme;
+  const onIslandLayoutChange = setIslandLayout;
+  const onIslandShineChange = setIslandShine;
+  const onMacBackgroundEffectChange = setMacBackgroundEffect;
+  const onAutoGroupToolsChange = setAutoGroupTools;
+  const onAvoidGroupingEditsChange = setAvoidGroupingEdits;
+  const onAutoExpandToolsChange = setAutoExpandTools;
+  const onExpandEditToolCallsByDefaultChange = setExpandEditToolCallsByDefault;
+  const onShowToolIconsChange = setShowToolIcons;
+  const onColoredToolIconsChange = setColoredToolIcons;
+  const onTransparentToolPickerChange = setTransparentToolPicker;
+  const onColoredSidebarIconsChange = setColoredSidebarIcons;
+  const onTransparencyChange = setTransparency;
+
+  const effectiveMacBackgroundEffect = !macLiquidGlassSupported && macBackgroundEffect === "liquid-glass"
+    ? "vibrancy"
+    : macBackgroundEffect;
+
   return (
     <div className="flex h-full flex-col">
-      {/* Header */}
-      <div className="border-b border-foreground/[0.06] px-6 py-4">
-        <h2 className="text-base font-semibold text-foreground">Appearance</h2>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          Customize the look and feel of the interface
-        </p>
-      </div>
+      <SettingsHeader title="Appearance" description="Customize the look and feel of the interface" />
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="px-6 py-2">
           {/* ── Theme section ── */}
-          <div className="py-3">
-            <div className="mb-1 flex items-center gap-2">
-              <SunMoon className="h-4 w-4 text-muted-foreground" />
-              <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                Theme
-              </span>
-            </div>
-
+          <SettingsSection icon={SunMoon} label="Theme" first>
             <SettingRow
               label="Color theme"
               description="Choose between light and dark appearance, or follow your system setting."
             >
               <SettingsSelect
                 value={theme}
-                onValueChange={(v) => onThemeChange(v as ThemeOption)}
+                onValueChange={onThemeChange}
                 options={[
                   { value: "dark", label: "Dark" },
                   { value: "light", label: "Light" },
@@ -84,17 +88,10 @@ export const AppearanceSettings = memo(function AppearanceSettings({
                 ]}
               />
             </SettingRow>
-          </div>
+          </SettingsSection>
 
           {/* ── Tools section ── */}
-          <div className="border-t border-foreground/[0.04] py-3">
-            <div className="mb-1 flex items-center gap-2">
-              <Wrench className="h-4 w-4 text-muted-foreground" />
-              <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                Tools
-              </span>
-            </div>
-
+          <SettingsSection icon={Wrench} label="Tools">
             <SettingRow
               label="Auto-group tools"
               description="Collapse consecutive tool calls into a single group. Disable to keep every tool call and in-between thinking row visible on its own."
@@ -126,17 +123,40 @@ export const AppearanceSettings = memo(function AppearanceSettings({
               />
             </SettingRow>
 
-          </div>
+            <SettingRow
+              label="Expand Edit and Write tools by default"
+              description="Start Edit and Write tool calls open when they appear. Disable to keep them collapsed until you open them."
+            >
+              <Switch
+                checked={expandEditToolCallsByDefault}
+                onCheckedChange={onExpandEditToolCallsByDefaultChange}
+              />
+            </SettingRow>
+
+            <SettingRow
+              label="Show tool icons"
+              description="Display icons next to tool call labels. Disable for a text-only view."
+            >
+              <Switch
+                checked={showToolIcons}
+                onCheckedChange={onShowToolIconsChange}
+              />
+            </SettingRow>
+
+            <SettingRow
+              label="Colored tool icons"
+              description="Tint tool call icons with per-tool colors. Disable for monochrome icons."
+            >
+              <Switch
+                checked={coloredToolIcons}
+                onCheckedChange={onColoredToolIconsChange}
+                disabled={!showToolIcons}
+              />
+            </SettingRow>
+          </SettingsSection>
 
           {/* ── Layout section ── */}
-          <div className="border-t border-foreground/[0.04] py-3">
-            <div className="mb-1 flex items-center gap-2">
-              <Layout className="h-4 w-4 text-muted-foreground" />
-              <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                Layout
-              </span>
-            </div>
-
+          <SettingsSection icon={Layout} label="Layout">
             <div className="py-3">
               <p className="text-sm font-medium text-foreground">Window layout</p>
               <p className="mt-0.5 text-xs text-muted-foreground">
@@ -239,30 +259,57 @@ export const AppearanceSettings = memo(function AppearanceSettings({
                 onCheckedChange={onColoredSidebarIconsChange}
               />
             </SettingRow>
-          </div>
-
-          {/* ── Transparency section ── */}
-          <div className="border-t border-foreground/[0.04] py-3">
-            <div className="mb-1 flex items-center gap-2">
-              <Blend className="h-4 w-4 text-muted-foreground" />
-              <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                Transparency
-              </span>
-            </div>
 
             <SettingRow
-              label="Window transparency"
-              description={
-                glassSupported
-                  ? "Allow the desktop to show through the window background. Uses Liquid Glass on macOS or Mica on Windows."
-                  : "Window transparency is not available on this platform."
-              }
+              label="Island border shine"
+              description="Show a subtle diagonal reflection on island panel borders. Only visible in island layout mode."
             >
               <Switch
-                checked={transparency}
-                onCheckedChange={onTransparencyChange}
-                disabled={!glassSupported}
+                checked={islandShine}
+                onCheckedChange={onIslandShineChange}
+                disabled={!islandLayout}
               />
+            </SettingRow>
+          </SettingsSection>
+
+          {/* ── Transparency section ── */}
+          <SettingsSection icon={Blend} label="Transparency">
+            <SettingRow
+              label={isMac ? "Window background effect" : "Window transparency"}
+              description={
+                isMac
+                  ? (
+                    macLiquidGlassSupported
+                      ? "Choose the native macOS background material. Blur Off keeps the window opaque, while switching from Liquid Glass to Vibrancy needs a restart."
+                      : "Choose the native macOS background material. Liquid Glass is unavailable on this Mac, so Vibrancy and Off are available."
+                  )
+                  : (
+                    glassSupported
+                      ? "Allow the desktop to show through the window background. Uses Mica on Windows when enabled."
+                      : "Window transparency is not available on this platform."
+                  )
+              }
+            >
+              {isMac ? (
+                <SettingsSelect
+                  value={effectiveMacBackgroundEffect}
+                  onValueChange={onMacBackgroundEffectChange}
+                  options={[
+                    ...(macLiquidGlassSupported
+                      ? [{ value: "liquid-glass" as const, label: "Liquid Glass" }]
+                      : []),
+                    { value: "vibrancy", label: "Vibrancy" },
+                    { value: "off", label: "Blur Off" },
+                  ]}
+                  className="min-w-[9.5rem]"
+                />
+              ) : (
+                <Switch
+                  checked={transparency}
+                  onCheckedChange={onTransparencyChange}
+                  disabled={!glassSupported}
+                />
+              )}
             </SettingRow>
 
             <SettingRow
@@ -274,7 +321,7 @@ export const AppearanceSettings = memo(function AppearanceSettings({
                 onCheckedChange={onTransparentToolPickerChange}
               />
             </SettingRow>
-          </div>
+          </SettingsSection>
         </div>
       </ScrollArea>
     </div>

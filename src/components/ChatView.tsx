@@ -1,17 +1,19 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useMemo, useCallback, useState, startTransition, memo } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useMemo, useCallback, useState, startTransition, memo, type PointerEvent as ReactPointerEvent } from "react";
 import { motion } from "motion/react";
 import { Loader2, Minus } from "lucide-react";
-import type { InstalledAgent, UIMessage } from "@/types";
+import type { UIMessage } from "@/types";
 import { AgentIcon } from "./AgentIcon";
 import { getAgentIcon } from "@/lib/engine-icons";
+import { useAgentContext } from "./AgentContext";
 import { MessageBubble } from "./MessageBubble";
 import { SummaryBlock } from "./SummaryBlock";
 import { ToolCall } from "./ToolCall";
 import { ToolGroupBlock } from "./ToolGroupBlock";
 import { TurnChangesSummary } from "./TurnChangesSummary";
-import { extractTurnSummaries } from "@/lib/turn-changes";
-import type { TurnSummary } from "@/lib/turn-changes";
-import { computeToolGroups, type ToolGroup, type ToolGroupInfo } from "@/lib/tool-groups";
+import { extractTurnSummaries } from "@/lib/chat/turn-changes";
+import type { TurnSummary } from "@/lib/chat/turn-changes";
+import { computeToolGroups, type ToolGroup, type ToolGroupInfo } from "@/lib/workspace/tool-groups";
+import { computeAssistantTurnDividerLabels } from "@/lib/chat/assistant-turn-divider";
 import { TextShimmer } from "@/components/ui/text-shimmer";
 import { ChatUiStateProvider } from "@/components/chat-ui-state";
 import {
@@ -20,9 +22,10 @@ import {
   getTopScrollProgress,
   isWithinBottomLockThreshold,
   shouldUnlockBottomLock,
-} from "@/lib/chat-scroll";
-import { CHAT_CONTENT_RESIZED_EVENT } from "@/lib/events";
-import { estimateRowHeight } from "@/lib/chat-virtualization";
+} from "@/lib/chat/scroll";
+import { estimateRowHeight } from "@/lib/chat/virtualization";
+import { CHAT_ROW_CLASS } from "@/components/lib/chat-layout";
+import { useSettingsStore } from "@/stores/settings-store";
 
 // ── Row model ──
 
@@ -41,6 +44,7 @@ const PROCESSING_ROW: RowDescriptor = { kind: "processing" };
 const CHAT_TOP_PADDING_PX = 56;
 const CHAT_BOTTOM_PADDING_PX = 144;
 const CHAT_EXTRA_BOTTOM_PADDING_PX = 280;
+const CHAT_COMPOSER_CLEARANCE_PX = 24;
 // Progressive rendering: render bottom rows immediately, hydrate older rows in background
 const INITIAL_RENDER_ROWS = 20;
 const HYDRATION_BATCH_SIZE = 40;
@@ -130,8 +134,8 @@ function canReuseRowDescriptor(previous: RowDescriptor | undefined, next: RowDes
 interface ChatMessageRowProps {
   row: RowDescriptor;
   showThinking: boolean;
-  autoExpandTools: boolean;
   animatingGroupKeys: Set<string>;
+  assistantTurnDividerLabels: Map<string, string>;
   continuationIds: Set<string>;
   sendNextId?: string | null;
   onRevert?: (checkpointId: string) => void;
@@ -143,8 +147,8 @@ interface ChatMessageRowProps {
 const ChatMessageRow = memo(function ChatMessageRow({
   row,
   showThinking,
-  autoExpandTools,
   animatingGroupKeys,
+  assistantTurnDividerLabels,
   continuationIds,
   sendNextId,
   onRevert,
@@ -152,9 +156,14 @@ const ChatMessageRow = memo(function ChatMessageRow({
   onSendQueuedNow,
   onUnqueueQueuedMessage,
 }: ChatMessageRowProps) {
+  // ── Display preferences from Zustand store ──
+  const autoExpandTools = useSettingsStore((s) => s.autoExpandTools);
+  const expandEditToolCallsByDefault = useSettingsStore((s) => s.expandEditToolCallsByDefault);
+  const showToolIcons = useSettingsStore((s) => s.showToolIcons);
+  const coloredToolIcons = useSettingsStore((s) => s.coloredToolIcons);
   if (row.kind === "processing") {
     return (
-      <div className="flex justify-start px-4 py-1.5">
+      <div className={`flex justify-start ${CHAT_ROW_CLASS}`}>
         <div className="flex items-center gap-1.5 text-xs">
           <Minus className="h-3 w-3 text-foreground/40" />
           <TextShimmer as="span" className="italic opacity-60" duration={1.8} spread={1.5}>
@@ -179,6 +188,9 @@ const ChatMessageRow = memo(function ChatMessageRow({
           messages={row.group.messages}
           showThinking={showThinking}
           autoExpandTools={autoExpandTools}
+          expandEditToolCallsByDefault={expandEditToolCallsByDefault}
+          showToolIcons={showToolIcons}
+          coloredToolIcons={coloredToolIcons}
           disableCollapseAnimation
           animate={isNewGroup}
         />
@@ -204,6 +216,9 @@ const ChatMessageRow = memo(function ChatMessageRow({
         <ToolCall
           message={msg}
           autoExpandTools={autoExpandTools}
+          expandEditToolCallsByDefault={expandEditToolCallsByDefault}
+          showToolIcons={showToolIcons}
+          coloredToolIcons={coloredToolIcons}
           disableCollapseAnimation
         />
       </div>
@@ -215,6 +230,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
       <MessageBubble
         message={msg}
         showThinking={showThinking}
+        assistantTurnDividerLabel={assistantTurnDividerLabels.get(msg.id)}
         isContinuation={continuationIds.has(msg.id)}
         isSendNextQueued={sendNextId === msg.id}
         onRevert={onRevert}
@@ -227,8 +243,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
 }, (prev, next) =>
   prev.row === next.row &&
   prev.showThinking === next.showThinking &&
-  prev.autoExpandTools === next.autoExpandTools &&
   prev.animatingGroupKeys === next.animatingGroupKeys &&
+  prev.assistantTurnDividerLabels === next.assistantTurnDividerLabels &&
   prev.continuationIds === next.continuationIds &&
   prev.sendNextId === next.sendNextId &&
   prev.onRevert === next.onRevert &&
@@ -243,9 +259,6 @@ interface ChatViewProps {
   messages: UIMessage[];
   isProcessing: boolean;
   showThinking: boolean;
-  autoGroupTools: boolean;
-  avoidGroupingEdits: boolean;
-  autoExpandTools: boolean;
   extraBottomPadding?: boolean;
   scrollToMessageId?: string;
   onScrolledToMessage?: () => void;
@@ -256,9 +269,6 @@ interface ChatViewProps {
   onSendQueuedNow?: (messageId: string) => void;
   onUnqueueQueuedMessage?: (messageId: string) => void;
   sendNextId?: string | null;
-  agents?: InstalledAgent[];
-  selectedAgent?: InstalledAgent | null;
-  onAgentChange?: (agent: InstalledAgent | null) => void;
   /** Current space ID — included in remount key so space switches show spinner immediately */
   spaceId?: string;
 }
@@ -266,10 +276,11 @@ interface ChatViewProps {
 // ── ChatView (outer, handles empty state) ──
 
 export const ChatView = memo(function ChatView(props: ChatViewProps) {
-  const { messages, agents, selectedAgent, onAgentChange } = props;
+  const { messages } = props;
+  const { agents, selectedAgent, handleAgentChange } = useAgentContext();
 
   if (messages.length === 0) {
-    const showAgentPicker = agents && agents.length > 1 && onAgentChange;
+    const showAgentPicker = agents.length > 1;
 
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -310,7 +321,7 @@ export const ChatView = memo(function ChatView(props: ChatViewProps) {
                   <button
                     key={agent.id}
                     title={agent.name}
-                    onClick={() => onAgentChange(agent.engine === "claude" ? null : agent)}
+                    onClick={() => handleAgentChange(agent.engine === "claude" ? null : agent)}
                     className={`rounded-full p-2 transition-all ${
                       isSelected
                         ? "bg-foreground/[0.06] ring-1 ring-foreground/[0.08] scale-110"
@@ -341,15 +352,18 @@ export const ChatView = memo(function ChatView(props: ChatViewProps) {
 // ── ChatViewContent (inner, module-level) ──
 
 function ChatViewContent({
-  messages, isProcessing, showThinking, autoGroupTools, avoidGroupingEdits,
-  autoExpandTools, extraBottomPadding, scrollToMessageId, onScrolledToMessage,
+  messages, isProcessing, showThinking, extraBottomPadding, scrollToMessageId, onScrolledToMessage,
   sessionId, onRevert, onFullRevert, onTopScrollProgress,
   onSendQueuedNow, onUnqueueQueuedMessage, sendNextId,
 }: ChatViewProps) {
+  // ── Display preferences from Zustand store (only those used directly in ChatViewContent) ──
+  const autoGroupTools = useSettingsStore((s) => s.autoGroupTools);
+  const avoidGroupingEdits = useSettingsStore((s) => s.avoidGroupingEdits);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // ── Scroll state (refs, not state — rerender-use-ref-transient-values) ──
   const bottomLockedRef = useRef(true);
+  const [composerInset, setComposerInset] = useState(0);
 
   // ── Deferred mount: show spinner for one frame, then render content ──
   // Prevents UI freeze on session/space switch by deferring heavy work.
@@ -361,26 +375,20 @@ function ChatViewContent({
     return () => cancelAnimationFrame(frame);
   }, []);
 
-  // Scroll to bottom once content mounts (session-switch layoutEffect fires before
-  // the scroll container exists, so this catches the first real mount).
-  useLayoutEffect(() => {
-    if (!contentReady) return;
-    const el = scrollContainerRef.current;
-    if (el && bottomLockedRef.current) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [contentReady]);
-
   const userScrollIntentRef = useRef(0);
-  const lastRowCountRef = useRef(0);
   const scrollRafPending = useRef(false);
-  const followBottomRafRef = useRef<number | null>(null);
   const cachedRowsByKeyRef = useRef<Map<string, RowDescriptor>>(new Map());
-  // Store callback in ref to avoid effect re-subscriptions (advanced-event-handler-refs)
+  // Store callbacks in refs to avoid effect re-subscriptions (advanced-event-handler-refs)
   const onTopScrollProgressRef = useRef(onTopScrollProgress);
   onTopScrollProgressRef.current = onTopScrollProgress;
+  const onScrolledToMessageRef = useRef(onScrolledToMessage);
+  onScrolledToMessageRef.current = onScrolledToMessage;
   const lastTopProgressRef = useRef(-1);
-  const bottomPadding = extraBottomPadding ? CHAT_EXTRA_BOTTOM_PADDING_PX : CHAT_BOTTOM_PADDING_PX;
+  const bottomPadding = useMemo(() => {
+    const fallbackPadding = extraBottomPadding ? CHAT_EXTRA_BOTTOM_PADDING_PX : CHAT_BOTTOM_PADDING_PX;
+    if (composerInset <= 0) return fallbackPadding;
+    return Math.max(fallbackPadding, composerInset + CHAT_COMPOSER_CLEARANCE_PX);
+  }, [composerInset, extraBottomPadding]);
 
   // ── Single-pass partition: queued vs non-queued (js-combine-iterations) ──
   const { nonQueuedMessages, queuedMessages } = useMemo(() => {
@@ -428,61 +436,41 @@ function ChatViewContent({
     return ids;
   }, [nonQueuedMessages, queuedMessages]);
 
-  // ── Structural identity caching for expensive derived data ──
-  const prevMsgStructureRef = useRef<{ length: number; lastId: string | undefined; lastToolResultCount: number }>({ length: 0, lastId: undefined, lastToolResultCount: 0 });
-  const cachedTurnSummaryRef = useRef<Map<number, TurnSummary>>(new Map());
-  const cachedToolGroupsRef = useRef<ToolGroupInfo>(EMPTY_TOOL_GROUP_INFO);
-  const prevIsProcessingRef = useRef(isProcessing);
-  const prevAutoGroupRef = useRef(autoGroupTools);
-  const prevAvoidEditRef = useRef(avoidGroupingEdits);
-
-  const msgStructure = useMemo(() => {
+  // ── Structural identity key for expensive derived data ──
+  // Primitive string key so useMemo can do stable dependency comparison.
+  // Recomputes turn summaries, divider labels, and tool groups only when
+  // message structure actually changes (new message, tool result arrives, processing toggles).
+  const structKey = useMemo(() => {
     let toolResultCount = 0;
     for (let i = nonQueuedMessages.length - 1; i >= Math.max(0, nonQueuedMessages.length - 10); i--) {
       if (nonQueuedMessages[i].role === "tool_call" && nonQueuedMessages[i].toolResult) toolResultCount++;
     }
-    return {
-      length: nonQueuedMessages.length,
-      lastId: nonQueuedMessages[nonQueuedMessages.length - 1]?.id,
-      lastToolResultCount: toolResultCount,
-    };
-  }, [nonQueuedMessages]);
-
-  const structureChanged =
-    msgStructure.length !== prevMsgStructureRef.current.length ||
-    msgStructure.lastId !== prevMsgStructureRef.current.lastId ||
-    msgStructure.lastToolResultCount !== prevMsgStructureRef.current.lastToolResultCount ||
-    isProcessing !== prevIsProcessingRef.current;
+    const lastId = nonQueuedMessages[nonQueuedMessages.length - 1]?.id ?? "";
+    return `${nonQueuedMessages.length}:${lastId}:${toolResultCount}:${isProcessing}`;
+  }, [nonQueuedMessages, isProcessing]);
 
   // ── Turn summaries (rerender-derived-state-no-effect) ──
   const turnSummaryByEndIndex = useMemo(() => {
-    if (!structureChanged && cachedTurnSummaryRef.current.size >= 0) {
-      if (prevMsgStructureRef.current.length > 0) return cachedTurnSummaryRef.current;
-    }
-    prevMsgStructureRef.current = msgStructure;
-    prevIsProcessingRef.current = isProcessing;
     const summaries = extractTurnSummaries(nonQueuedMessages, isProcessing);
     const map = new Map<number, TurnSummary>();
     for (const s of summaries) {
       map.set(s.endMessageIndex, s);
     }
-    cachedTurnSummaryRef.current = map;
     return map;
-  }, [nonQueuedMessages, isProcessing, structureChanged, msgStructure]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [structKey]);
+
+  const assistantTurnDividerLabels = useMemo(() => {
+    return computeAssistantTurnDividerLabels(nonQueuedMessages, isProcessing);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [structKey]);
 
   // ── Tool groups (js-index-maps, js-set-map-lookups) ──
   const { groups: toolGroups, groupedIndices } = useMemo(() => {
     if (!autoGroupTools) return EMPTY_TOOL_GROUP_INFO;
-    const settingsChanged = autoGroupTools !== prevAutoGroupRef.current || avoidGroupingEdits !== prevAvoidEditRef.current;
-    prevAutoGroupRef.current = autoGroupTools;
-    prevAvoidEditRef.current = avoidGroupingEdits;
-    if (!structureChanged && !settingsChanged && cachedToolGroupsRef.current !== EMPTY_TOOL_GROUP_INFO) {
-      return cachedToolGroupsRef.current;
-    }
-    const result = computeToolGroups(nonQueuedMessages, isProcessing, avoidGroupingEdits);
-    cachedToolGroupsRef.current = result;
-    return result;
-  }, [autoGroupTools, avoidGroupingEdits, nonQueuedMessages, isProcessing, structureChanged]);
+    return computeToolGroups(nonQueuedMessages, isProcessing, avoidGroupingEdits);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [structKey, autoGroupTools, avoidGroupingEdits]);
 
   // ── Tool group animation tracking ──
   const finalizedGroupKeys = useMemo(() => {
@@ -639,30 +627,18 @@ function ChatViewContent({
     }
   }, []);
 
-  const scheduleFollowBottom = useCallback(() => {
-    if (!bottomLockedRef.current) return;
-    if (followBottomRafRef.current !== null) return;
-    followBottomRafRef.current = requestAnimationFrame(() => {
-      followBottomRafRef.current = null;
-      const el = scrollContainerRef.current;
-      if (!el || !bottomLockedRef.current) return;
-      el.scrollTop = el.scrollHeight;
-      publishTopProgress(getTopScrollProgress(el.scrollTop));
-    });
+  const followBottomNow = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el || !bottomLockedRef.current) return;
+    el.scrollTop = el.scrollHeight;
+    publishTopProgress(getTopScrollProgress(el.scrollTop));
   }, [publishTopProgress]);
-
-  useEffect(() => {
-    return () => {
-      if (followBottomRafRef.current !== null) {
-        cancelAnimationFrame(followBottomRafRef.current);
-      }
-    };
-  }, []);
 
   // Keep user at bottom as hydration replaces spacer with real rows.
   // Only pin to bottom if the user has NEVER scrolled during this session.
   // userScrollIntentRef starts at 0 (reset on session switch) and is set to a
-  // positive timestamp on any wheel/touch/pointerDown. Checking > 0 means
+  // positive timestamp on wheel/touch gestures and direct scroll-container
+  // pointer interactions (for scrollbar drags). Checking > 0 means
   // "has ever scrolled" — unlike Date.now() <= ref which only covers 250ms.
   //
   // Once the user scrolls, content is added ABOVE their viewport. The browser
@@ -673,11 +649,56 @@ function ChatViewContent({
       bottomLockedRef.current = false;
       return;
     }
+    followBottomNow();
+  }, [effectiveHydratedFrom, followBottomNow]);
+
+  useLayoutEffect(() => {
+    if (!contentReady) return;
+    if (rows.length === 0) return;
+    followBottomNow();
+  }, [bottomPadding, contentReady, followBottomNow, rows.length]);
+
+  useLayoutEffect(() => {
+    if (!contentReady) return;
     const el = scrollContainerRef.current;
-    if (el) {
-      el.scrollTop = el.scrollHeight;
+    if (!el) return;
+
+    const composer = el.parentElement?.querySelector<HTMLElement>("[data-chat-composer]");
+    if (!composer) {
+      setComposerInset((prev) => (prev === 0 ? prev : 0));
+      return;
     }
-  }, [effectiveHydratedFrom]);
+
+    const updateComposerInset = () => {
+      const nextInset = Math.ceil(composer.getBoundingClientRect().height);
+      setComposerInset((prev) => (prev === nextInset ? prev : nextInset));
+    };
+
+    updateComposerInset();
+
+    const observer = new ResizeObserver(() => {
+      updateComposerInset();
+      followBottomNow();
+    });
+    observer.observe(composer);
+
+    return () => observer.disconnect();
+  }, [contentReady, followBottomNow]);
+
+  useLayoutEffect(() => {
+    if (!contentReady) return;
+    const el = scrollContainerRef.current;
+    const inner = el?.firstElementChild;
+    if (!el || !inner) return;
+
+    const observer = new ResizeObserver(() => {
+      followBottomNow();
+    });
+    observer.observe(el);
+    observer.observe(inner);
+
+    return () => observer.disconnect();
+  }, [contentReady, followBottomNow]);
 
   const handleScroll = useCallback(() => {
     if (scrollRafPending.current) return;
@@ -712,6 +733,11 @@ function ChatViewContent({
     userScrollIntentRef.current = Date.now() + USER_SCROLL_INTENT_WINDOW_MS;
   }, []);
 
+  const handlePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
+    markUserIntent();
+  }, [markUserIntent]);
+
   // ── Passive wheel/touch listeners (compositor-unblocking) ──
   // Must re-run when contentReady changes — on initial mount the scroll container
   // doesn't exist (spinner showing), so listeners aren't attached. When contentReady
@@ -727,64 +753,20 @@ function ChatViewContent({
     };
   }, [markUserIntent, contentReady]);
 
-  // ── Auto-follow on new messages ──
-  useEffect(() => {
-    if (rows.length === lastRowCountRef.current) return;
-    lastRowCountRef.current = rows.length;
-    if (rows.length > 0) scheduleFollowBottom();
-  }, [rows.length, scheduleFollowBottom]);
-
-  useEffect(() => {
-    if (rows.length > 0) scheduleFollowBottom();
-  }, [bottomPadding, rows.length, scheduleFollowBottom]);
-
-  // ── Auto-follow during streaming (content height grows without row count change) ──
-  useEffect(() => {
-    if (!isProcessing) return;
-    const el = scrollContainerRef.current;
-    if (!el) return;
-
-    const observer = new ResizeObserver(() => {
-      scheduleFollowBottom();
-    });
-
-    // Observe the inner content container for height changes
-    const inner = el.firstElementChild;
-    if (inner) observer.observe(inner);
-    return () => observer.disconnect();
-  }, [isProcessing, scheduleFollowBottom]);
-
   // ── Session switch — force scroll to bottom (rerender-dependencies — primitive dep) ──
   useLayoutEffect(() => {
     if (!sessionId) return;
     bottomLockedRef.current = true;
     userScrollIntentRef.current = 0;
     lastTopProgressRef.current = -1;
-    lastRowCountRef.current = 0;
     // Scroll immediately — useLayoutEffect fires before browser paints,
     // so setting scrollTop here prevents any visible flicker at scrollTop=0.
-    const el = scrollContainerRef.current;
-    if (el) {
-      el.scrollTop = el.scrollHeight;
-      publishTopProgress(getTopScrollProgress(el.scrollTop));
-      // Post-paint correction: child effects may change DOM heights after mount
-      requestAnimationFrame(() => {
-        if (bottomLockedRef.current && el) {
-          el.scrollTop = el.scrollHeight;
-        }
-      });
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
-
-  // ── Content resize (mermaid diagrams etc.) ──
-  useEffect(() => {
-    const handleContentResize = () => {
-      if (rows.length > 0) scheduleFollowBottom();
-    };
-    window.addEventListener(CHAT_CONTENT_RESIZED_EVENT, handleContentResize);
-    return () => window.removeEventListener(CHAT_CONTENT_RESIZED_EVENT, handleContentResize);
-  }, [rows.length, scheduleFollowBottom]);
+    followBottomNow();
+    // Post-paint correction: child effects may change DOM heights after mount
+    requestAnimationFrame(() => {
+      followBottomNow();
+    });
+  }, [followBottomNow, sessionId]);
 
   // ── Scroll-to-message (search navigation) ──
   useEffect(() => {
@@ -811,11 +793,11 @@ function ChatViewContent({
           el.classList.add("search-highlight");
           setTimeout(() => {
             el.classList.remove("search-highlight");
-            onScrolledToMessage?.();
+            onScrolledToMessageRef.current?.();
           }, 1500);
         }, 100);
       } else {
-        onScrolledToMessage?.();
+        onScrolledToMessageRef.current?.();
       }
     });
   }, [scrollToMessageId, effectiveHydratedFrom, rows]);
@@ -837,7 +819,7 @@ function ChatViewContent({
         className="min-h-0 flex-1 overflow-y-auto"
         style={{ overscrollBehaviorY: "contain" }}
         onScroll={handleScroll}
-        onPointerDown={markUserIntent}
+        onPointerDown={handlePointerDown}
       >
         <div style={{ paddingTop: `${CHAT_TOP_PADDING_PX}px`, paddingBottom: `${bottomPadding}px` }}>
           {/* Single spacer for all unhydrated rows — 1 div instead of hundreds */}
@@ -850,8 +832,8 @@ function ChatViewContent({
               <ChatMessageRow
                 row={row}
                 showThinking={showThinking}
-                autoExpandTools={autoExpandTools}
                 animatingGroupKeys={animatingGroupKeys}
+                assistantTurnDividerLabels={assistantTurnDividerLabels}
                 continuationIds={continuationIds}
                 sendNextId={sendNextId}
                 onRevert={onRevert}

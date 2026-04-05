@@ -131,6 +131,48 @@ export function register(): void {
     }
   });
 
+  ipcMain.handle("sessions:update-meta", async (
+    _event,
+    { projectId, sessionId, patch }: {
+      projectId: string;
+      sessionId: string;
+      patch: { pinned?: boolean; folderId?: string | null; branch?: string };
+    },
+  ) => {
+    try {
+      // Patch the .meta.json sidecar
+      const metaPath = getMetaFilePath(projectId, sessionId);
+      try {
+        const metaRaw = await fs.promises.readFile(metaPath, "utf-8");
+        const meta = JSON.parse(metaRaw);
+        if ("pinned" in patch) meta.pinned = patch.pinned || undefined;
+        if ("folderId" in patch) meta.folderId = patch.folderId || undefined;
+        if ("branch" in patch) meta.branch = patch.branch || undefined;
+        await fs.promises.writeFile(metaPath, JSON.stringify(meta), "utf-8");
+      } catch {
+        // meta sidecar missing — will be recreated on next full save
+      }
+
+      // Patch the main .json file (read → merge → write)
+      const filePath = getSessionFilePath(projectId, sessionId);
+      try {
+        const raw = await fs.promises.readFile(filePath, "utf-8");
+        const data = JSON.parse(raw);
+        if ("pinned" in patch) data.pinned = patch.pinned || undefined;
+        if ("folderId" in patch) data.folderId = patch.folderId || undefined;
+        if ("branch" in patch) data.branch = patch.branch || undefined;
+        await fs.promises.writeFile(filePath, JSON.stringify(data), "utf-8");
+      } catch {
+        // main file missing — nothing to patch
+      }
+
+      return { ok: true };
+    } catch (err) {
+      const message = reportError("SESSIONS:UPDATE_META_ERR", err, { projectId, sessionId });
+      return { error: message };
+    }
+  });
+
   ipcMain.handle("sessions:delete", async (_event, projectId: string, sessionId: string) => {
     try {
       const filePath = getSessionFilePath(projectId, sessionId);

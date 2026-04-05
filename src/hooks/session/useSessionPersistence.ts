@@ -1,9 +1,9 @@
 import { useCallback, useEffect } from "react";
 import { toast } from "sonner";
-import type { PersistedSession, ClaudeEvent, SystemInitEvent, EngineId } from "../../types";
+import type { PersistedSession, ClaudeEvent, SystemInitEvent, EngineId, ACPSessionEvent, ACPPermissionEvent, ACPTurnCompleteEvent } from "@/types";
 import { toMcpStatusState } from "../../lib/mcp-utils";
-import type { ACPSessionEvent, ACPPermissionEvent, ACPTurnCompleteEvent } from "../../types/acp";
-import { normalizeToolInput as acpNormalizeToolInput, pickAutoResponseOption } from "../../lib/acp-adapter";
+import { buildPersistedSession } from "../../lib/session/records";
+import { normalizeToolInput as acpNormalizeToolInput, pickAutoResponseOption } from "../../lib/engine/acp-adapter";
 import { DRAFT_ID } from "./types";
 import type { SharedSessionRefs, SharedSessionSetters, EngineHooks } from "./types";
 
@@ -49,6 +49,7 @@ export function useSessionPersistence({
     switchSessionRef,
     acpPermissionBehaviorRef,
     saveTimerRef,
+    visibleSplitSessionIdsRef,
   } = refs;
 
   // Persist session with Codex thread ID fallback
@@ -147,18 +148,16 @@ export function useSessionPersistence({
         const bgState = backgroundStoreRef.current.get(sid);
         const session = sessionsRef.current.find((s) => s.id === sid);
         if (bgState && session) {
-          window.claude.sessions.save({
-            id: sid,
-            projectId: session.projectId,
-            title: session.title,
-            createdAt: session.createdAt,
-            messages: bgState.messages,
-            model: session.model || bgState.sessionInfo?.model,
-            planMode: session.planMode,
-            totalCost: bgState.totalCost,
-            engine: session.engine,
-            ...(session.engine === "codex" && session.codexThreadId ? { codexThreadId: session.codexThreadId } : {}),
-          });
+          const persisted = buildPersistedSession(
+            {
+              ...session,
+              model: session.model || bgState.sessionInfo?.model,
+            },
+            bgState.messages,
+            bgState.totalCost,
+            bgState.contextUsage,
+          );
+          window.claude.sessions.save(persisted);
         }
       }
     };
@@ -179,6 +178,8 @@ export function useSessionPersistence({
       const sid = event._sessionId;
       if (!sid) return;
       if (sid === activeSessionIdRef.current) return;
+      // Split view: secondary pane's engine hooks handle their own events
+      if (visibleSplitSessionIdsRef.current.includes(sid)) return;
 
       // Pre-started session: route to background store AND extract MCP statuses
       if (sid === preStartedSessionIdRef.current) {
@@ -201,6 +202,7 @@ export function useSessionPersistence({
       const sid = event._sessionId;
       if (!sid) return;
       if (sid === activeSessionIdRef.current) return;
+      if (visibleSplitSessionIdsRef.current.includes(sid)) return;
       if (sid === draftAcpSessionIdRef.current) return;
       backgroundStoreRef.current.handleACPEvent(event);
     });
@@ -208,7 +210,7 @@ export function useSessionPersistence({
     // Route permission requests for non-active Claude sessions to the background store
     const unsubBgPerm = window.claude.onPermissionRequest((data) => {
       const sid = data._sessionId;
-      if (!sid || sid === activeSessionIdRef.current || sid === preStartedSessionIdRef.current) return;
+      if (!sid || sid === activeSessionIdRef.current || visibleSplitSessionIdsRef.current.includes(sid) || sid === preStartedSessionIdRef.current) return;
       backgroundStoreRef.current.setPermission(sid, {
         requestId: data.requestId,
         toolName: data.toolName,
@@ -223,7 +225,7 @@ export function useSessionPersistence({
     // (auto-respond if the client-side permission behavior allows it)
     const unsubBgAcpPerm = window.claude.acp.onPermissionRequest((data: ACPPermissionEvent) => {
       const sid = data._sessionId;
-      if (!sid || sid === activeSessionIdRef.current) return;
+      if (!sid || sid === activeSessionIdRef.current || visibleSplitSessionIdsRef.current.includes(sid)) return;
       if (sid === draftAcpSessionIdRef.current) return;
 
       // Auto-respond for background ACP sessions when behavior is configured
@@ -249,21 +251,21 @@ export function useSessionPersistence({
     // (clears isProcessing so the session doesn't appear stuck when switching back)
     const unsubBgAcpTurn = window.claude.acp.onTurnComplete((data: ACPTurnCompleteEvent) => {
       const sid = data._sessionId;
-      if (!sid || sid === activeSessionIdRef.current) return;
+      if (!sid || sid === activeSessionIdRef.current || visibleSplitSessionIdsRef.current.includes(sid)) return;
       backgroundStoreRef.current.handleACPTurnComplete(sid);
     });
 
     // Route Codex events for non-active sessions to the background store
     const unsubCodex = window.claude.codex.onEvent((event) => {
       const sid = event._sessionId;
-      if (!sid || sid === activeSessionIdRef.current) return;
+      if (!sid || sid === activeSessionIdRef.current || visibleSplitSessionIdsRef.current.includes(sid)) return;
       backgroundStoreRef.current.handleCodexEvent(event);
     });
 
     // Route Codex approval requests for non-active sessions — auto-decline for now
     const unsubCodexApproval = window.claude.codex.onApprovalRequest((data) => {
       const sid = data._sessionId;
-      if (!sid || sid === activeSessionIdRef.current) return;
+      if (!sid || sid === activeSessionIdRef.current || visibleSplitSessionIdsRef.current.includes(sid)) return;
       if (data.method === "item/tool/requestUserInput") {
         backgroundStoreRef.current.setPermission(sid, {
           requestId: String(data.rpcId),
@@ -281,6 +283,7 @@ export function useSessionPersistence({
             })),
           },
           toolUseId: data.itemId,
+          codexRpcId: data.rpcId,
         });
         return;
       }
@@ -291,6 +294,7 @@ export function useSessionPersistence({
         toolName: data.method.includes("commandExecution") ? "Bash" : "Edit",
         toolInput: {},
         toolUseId: data.itemId,
+        codexRpcId: data.rpcId,
       });
     });
 
@@ -314,6 +318,8 @@ export function useSessionPersistence({
         createdAt: session.createdAt,
         messages: msgs,
         model: session.model || sessionInfo?.model,
+        effort: session.effort,
+        permissionMode: session.permissionMode,
         planMode: session.planMode,
         totalCost: totalCostRef.current,
         contextUsage: contextUsageRef.current,
@@ -365,6 +371,10 @@ export function useSessionPersistence({
           updates.model = sessionInfo.model;
         }
 
+        if (sessionInfo?.permissionMode && s.permissionMode !== sessionInfo.permissionMode) {
+          updates.permissionMode = sessionInfo.permissionMode;
+        }
+
         // Total cost sync
         if (totalCost !== 0 && s.totalCost !== totalCost) {
           updates.totalCost = totalCost;
@@ -391,7 +401,7 @@ export function useSessionPersistence({
       });
       return changed ? next : prev;
     });
-  }, [activeSessionId, sessionInfo?.model, totalCost, messages.length, engine.isProcessing, engine.pendingPermission]);
+  }, [activeSessionId, sessionInfo?.model, sessionInfo?.permissionMode, totalCost, messages.length, engine.isProcessing, engine.pendingPermission]);
 
   // Save current session to disk (used before switching/creating)
   const saveCurrentSession = useCallback(async () => {
@@ -401,21 +411,12 @@ export function useSessionPersistence({
     if (!session) return;
     // Never persist queued messages — unsent queue state is runtime-only.
     const msgs = messagesRef.current.filter((m) => !m.isQueued);
-    const data: PersistedSession = {
-      id,
-      projectId: session.projectId,
-      title: session.title,
-      createdAt: session.createdAt,
-      messages: msgs,
-      model: session.model,
-      planMode: session.planMode,
-      totalCost: totalCostRef.current,
-      contextUsage: contextUsageRef.current,
-      engine: session.engine,
-      ...(session.agentId ? { agentId: session.agentId } : {}),
-      ...(session.agentSessionId ? { agentSessionId: session.agentSessionId } : {}),
-      ...(session.engine === "codex" && session.codexThreadId ? { codexThreadId: session.codexThreadId } : {}),
-    };
+    const data: PersistedSession = buildPersistedSession(
+      session,
+      msgs,
+      totalCostRef.current,
+      contextUsageRef.current,
+    );
     await persistSessionWithCodexFallback(data);
   }, [persistSessionWithCodexFallback]);
 

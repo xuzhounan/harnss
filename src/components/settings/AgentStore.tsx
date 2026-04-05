@@ -20,13 +20,15 @@ import {
 } from "@/components/ui/tooltip";
 import { AgentIcon } from "@/components/AgentIcon";
 import { useAgentStore } from "@/hooks/useAgentStore";
-import type { BinaryCheckResult } from "@/lib/acp-agent-registry";
-import { mergeRegistryAgentUpdate } from "@/lib/acp-agent-updates";
+import type { BinaryCheckResult } from "@/lib/engine/acp-agent-registry";
+import { mergeRegistryAgentUpdate } from "@/lib/engine/acp-agent-updates";
 import {
   registryAgentToDefinition,
   hasUpdate,
   isInstallable,
-} from "@/lib/agent-store-utils";
+  getRegistryAgentSetupUrl,
+  getPreferredRegistryBinaryTarget,
+} from "@/lib/background/agent-store-utils";
 import type { InstalledAgent, RegistryAgent } from "@/types";
 
 // ── Types ──
@@ -99,12 +101,16 @@ const StoreAgentCard = memo(function StoreAgentCard({
   agent,
   status,
   isInstalling,
+  setupUrl,
+  setupLabel,
   onInstall,
   onUninstall,
 }: {
   agent: RegistryAgent;
   status: CardStatus;
   isInstalling: boolean;
+  setupUrl: string | null;
+  setupLabel: string;
   onInstall: () => void;
   onUninstall: () => void;
 }) {
@@ -216,15 +222,15 @@ const StoreAgentCard = memo(function StoreAgentCard({
           </Button>
         )}
 
-        {status === "manual" && agent.repository && (
+        {status === "manual" && setupUrl && (
           <a
-            href={agent.repository}
+            href={setupUrl}
             target="_blank"
             rel="noopener noreferrer"
           >
             <Button variant="outline" size="sm" className="h-7 gap-1.5 px-3 text-xs">
               <ArrowUpRight className="h-3 w-3" />
-              Setup
+              {setupLabel}
             </Button>
           </a>
         )}
@@ -240,7 +246,7 @@ export const AgentStore = memo(function AgentStore({
   onInstall,
   onUninstall,
 }: AgentStoreProps) {
-  const { registryAgents, isLoading, error, binaryPaths, refresh } = useAgentStore();
+  const { registryAgents, isLoading, error, binaryPaths, platformKeys, refresh } = useAgentStore();
   const [search, setSearch] = useState("");
   const [installing, setInstalling] = useState<Set<string>>(new Set());
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -359,12 +365,17 @@ export const AgentStore = memo(function AgentStore({
           <div className="grid grid-cols-2 gap-3 px-5 pb-5">
             {filtered.map((agent) => {
               const status = getCardStatus(agent, installedMap, binaryPaths);
+              const hasPlatformArchive =
+                getPreferredRegistryBinaryTarget(agent, platformKeys)?.archive != null;
+              const setupUrl = getRegistryAgentSetupUrl(agent, platformKeys);
               return (
                 <StoreAgentCard
                   key={agent.id}
                   agent={agent}
                   status={status}
                   isInstalling={installing.has(agent.id)}
+                  setupUrl={setupUrl}
+                  setupLabel={hasPlatformArchive ? "Download" : "Setup"}
                   onInstall={() => handleInstall(agent)}
                   onUninstall={() => handleUninstall(agent.id)}
                 />

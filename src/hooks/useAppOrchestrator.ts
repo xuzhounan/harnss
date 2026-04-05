@@ -1,145 +1,53 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useProjectManager } from "@/hooks/useProjectManager";
 import { useSessionManager } from "@/hooks/useSessionManager";
 import { useSidebar } from "@/hooks/useSidebar";
 import { useSpaceManager } from "@/hooks/useSpaceManager";
-import { useSettings } from "@/hooks/useSettings";
+import { useSettingsCompat as useSettings } from "@/hooks/useSettingsCompat";
 import { useTheme } from "@/hooks/useTheme";
 import { useSpaceTerminals } from "@/hooks/useSpaceTerminals";
-import { useBackgroundAgents } from "@/hooks/useBackgroundAgents";
 import { useAgentRegistry } from "@/hooks/useAgentRegistry";
 import { useAcpAgentAutoUpdate } from "@/hooks/useAcpAgentAutoUpdate";
-import { useNotifications } from "@/hooks/useNotifications";
-import {
-  APP_SIDEBAR_WIDTH,
-  getMinChatWidth,
-  getResizeHandleWidth,
-  getToolPickerWidth,
-  ISLAND_LAYOUT_MARGIN,
-  WINDOWS_FRAME_BUFFER_WIDTH,
-  MIN_RIGHT_PANEL_WIDTH,
-  MIN_TOOLS_PANEL_WIDTH,
-} from "@/lib/layout-constants";
+import { useSplitView } from "@/hooks/useSplitView";
+import { useFolderManager } from "@/hooks/useFolderManager";
+import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { getAppMinimumWidth } from "@/lib/layout/split-layout";
 import { resolveModelValue } from "@/lib/model-utils";
-import { getStoredProjectGitCwd, resolveProjectForSpace } from "@/lib/space-projects";
-import { getTodoItems } from "@/lib/todo-utils";
 import { isWindows } from "@/lib/utils";
-import { COLUMN_TOOL_IDS, type ToolId } from "@/components/ToolPicker";
-import type { ImageAttachment, Space, SpaceColor, InstalledAgent, AcpPermissionBehavior, ClaudeEffort, EngineId } from "@/types";
-import type { NotificationSettings } from "@/types/ui";
+import type { ToolId } from "@/types/tools";
+import type { AcpPermissionBehavior, EngineId, InstalledAgent } from "@/types";
+import { getSyncedPlanMode } from "@/hooks/app-layout/session-utils";
+import { useAppEnvironmentState } from "@/hooks/app-layout/useAppEnvironmentState";
+import { useAppSessionActions } from "@/hooks/app-layout/useAppSessionActions";
+import { useAppSpaceWorkflow } from "@/hooks/app-layout/useAppSpaceWorkflow";
+import { useAppContextualPanels } from "@/hooks/app-layout/useAppContextualPanels";
+
+export { getSyncedPlanMode } from "@/hooks/app-layout/session-utils";
 
 export function useAppOrchestrator() {
   const sidebar = useSidebar();
+  const splitView = useSplitView();
   const projectManager = useProjectManager();
   const spaceManager = useSpaceManager();
-  const LAST_SESSION_KEY = "harnss-last-session-per-space";
   // Read ACP permission behavior early — it's a global setting (same localStorage key as useSettings)
   // so we can read it before useSettings which depends on manager.activeSession for per-project scoping
   const acpPermissionBehavior = (localStorage.getItem("harnss-acp-permission-behavior") ?? "ask") as AcpPermissionBehavior;
-  const manager = useSessionManager(projectManager.projects, acpPermissionBehavior, spaceManager.setActiveSpaceId);
-
-  // Derive activeProjectId early so useSettings can scope per-project
-  const activeProjectId = manager.activeSession?.projectId ?? manager.draftProjectId;
-  const readLastSessionMap = useCallback((): Record<string, string> => {
-    try {
-      const raw = localStorage.getItem(LAST_SESSION_KEY);
-      return raw ? JSON.parse(raw) : {};
-    } catch {
-      return {};
-    }
-  }, [LAST_SESSION_KEY]);
-  const activeSpaceProject = useMemo(
-    () => resolveProjectForSpace({
-      spaceId: spaceManager.activeSpaceId,
-      activeProjectId,
-      lastSessionBySpace: readLastSessionMap(),
-      projects: projectManager.projects,
-      sessions: manager.sessions,
-    }),
-    [spaceManager.activeSpaceId, activeProjectId, readLastSessionMap, projectManager.projects, manager.sessions],
+  const manager = useSessionManager(
+    projectManager.projects,
+    acpPermissionBehavior,
+    spaceManager.setActiveSpaceId,
+    splitView.visibleSessionIds,
   );
-  const settingsProjectId = activeSpaceProject?.id ?? activeProjectId ?? null;
-  const activeProject = projectManager.projects.find((p) => p.id === activeProjectId);
 
   const [selectedAgent, setSelectedAgent] = useState<InstalledAgent | null>(null);
   const settingsEngine: EngineId = (!manager.isDraft && manager.activeSession?.engine)
     ? manager.activeSession.engine
     : (selectedAgent?.engine ?? "claude");
+  const settingsProjectId = manager.activeSession?.projectId ?? manager.draftProjectId ?? null;
   const settings = useSettings(settingsProjectId, settingsEngine);
   const resolvedTheme = useTheme(settings.theme);
-  const showThinking = true;
-  const activeProjectPath = settings.gitCwd ?? activeProject?.path;
   const { agents, refresh: refreshAgents, saveAgent, deleteAgent } = useAgentRegistry();
   useAcpAgentAutoUpdate({ installedAgents: agents, refreshInstalledAgents: refreshAgents });
-  const getClaudeEffortForModel = useCallback((model: string | undefined): ClaudeEffort | undefined => {
-    if (!model) return undefined;
-    const meta = manager.supportedModels.find((entry) => entry.value === model);
-    if (!meta?.supportsEffort) return undefined;
-    const levels = meta.supportedEffortLevels ?? [];
-    if (levels.includes(settings.claudeEffort)) return settings.claudeEffort;
-    if (levels.includes("high")) return "high";
-    return levels[0];
-  }, [manager.supportedModels, settings.claudeEffort]);
-
-  const handleAgentWorktreeChange = useCallback((nextPath: string | null) => {
-    settings.setGitCwd(nextPath);
-
-    // If there's an active non-draft session, open a new chat so the agent
-    // starts fresh in the selected worktree (instead of restarting in-place).
-    if (manager.activeSessionId && !manager.isDraft && manager.activeSession) {
-      const engine = manager.activeSession.engine ?? "claude";
-      manager.createSession(manager.activeSession.projectId, {
-        model: settings.getModelForEngine(engine) || undefined,
-        permissionMode: settings.permissionMode,
-        planMode: settings.planMode,
-        thinkingEnabled: settings.thinking,
-        effort: engine === "claude"
-          ? getClaudeEffortForModel(settings.getModelForEngine("claude") || undefined)
-          : undefined,
-        engine,
-        agentId: manager.activeSession.agentId,
-      });
-    }
-  }, [manager.activeSessionId, manager.isDraft, manager.activeSession, manager.createSession, settings]);
-
-  const handleAgentChange = useCallback((agent: InstalledAgent | null) => {
-    setSelectedAgent(agent);
-
-    // If this agent would open a new chat, do it immediately on selection
-    const currentEngine = manager.activeSession?.engine ?? "claude";
-    const currentAgentId = manager.activeSession?.agentId;
-    const wantedEngine = agent?.engine ?? "claude";
-    const wantedAgentId = agent?.id;
-    const wantedModel = settings.getModelForEngine(wantedEngine);
-    const wantedClaudeEffort = wantedEngine === "claude"
-      ? getClaudeEffortForModel(wantedModel || undefined)
-      : undefined;
-    const needsNewSession = !manager.isDraft && manager.activeSession && (
-      currentEngine !== wantedEngine ||
-      (currentEngine === "acp" && wantedEngine === "acp" && currentAgentId !== wantedAgentId)
-    );
-
-    if (needsNewSession) {
-      manager.createSession(manager.activeSession!.projectId, {
-        model: wantedModel || undefined,
-        permissionMode: settings.permissionMode,
-        planMode: settings.planMode,
-        thinkingEnabled: settings.thinking,
-        effort: wantedClaudeEffort,
-        engine: wantedEngine,
-        agentId: agent?.id ?? "claude-code",
-        cachedConfigOptions: agent?.cachedConfigOptions,
-      });
-    } else {
-      manager.setDraftAgent(
-        wantedEngine,
-        agent?.id ?? "claude-code",
-        agent?.cachedConfigOptions,
-        wantedModel || undefined,
-      );
-    }
-  }, [manager.setDraftAgent, manager.isDraft, manager.activeSession, manager.createSession, settings.getModelForEngine, settings.permissionMode, settings.planMode, settings.thinking, getClaudeEffortForModel]);
-
   // Engine is locked once a session is active (not draft) — null means free to switch
   const lockedEngine = !manager.isDraft && manager.activeSession?.engine
     ? manager.activeSession.engine
@@ -149,73 +57,7 @@ export function useAppOrchestrator() {
   const lockedAgentId = !manager.isDraft && manager.activeSession?.agentId
     ? manager.activeSession.agentId
     : null;
-
-  // Persist ACP config options cache when live session provides them,
-  // then refresh agent registry so next agent selection uses cached values
-  useEffect(() => {
-    const agentId = manager.activeSession?.agentId;
-    if (!agentId || manager.activeSession?.engine !== "acp") return;
-    if (!manager.acpConfigOptions?.length) return;
-
-    window.claude.agents.updateCachedConfig(agentId, manager.acpConfigOptions)
-      .then(() => refreshAgents());
-  }, [manager.acpConfigOptions, manager.activeSession, refreshAgents]);
-
-  const [showSettings, setShowSettings] = useState(false);
-
-  // ── Glass/transparency support detection ──
-  const [glassSupported, setGlassSupported] = useState(false);
-  useEffect(() => {
-    window.claude.getGlassSupported().then((supported) => setGlassSupported(supported));
-  }, []);
-
-  // Toggle the glass-enabled CSS class when the transparency setting changes.
-  // Preload applies the initial class from localStorage so first paint stays in sync.
-  useEffect(() => {
-    if (!glassSupported) return;
-    const root = document.documentElement;
-    if (settings.transparency) {
-      root.classList.add("glass-enabled");
-    } else {
-      root.classList.remove("glass-enabled");
-    }
-  }, [settings.transparency, glassSupported]);
-
-  // ── Notification settings (loaded from main-process AppSettings) ──
-  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
-  const [devFillEnabled, setDevFillEnabled] = useState(false);
-  const [jiraBoardEnabled, setJiraBoardEnabled] = useState(false);
-
-  // Load on mount + re-fetch when settings panel closes (so changes take effect immediately)
-  useEffect(() => {
-    window.claude.settings.get().then((s) => {
-      if (s?.notifications) setNotificationSettings(s.notifications as NotificationSettings);
-      setDevFillEnabled(import.meta.env.DEV && !!s?.showDevFillInChatTitleBar);
-      setJiraBoardEnabled(!!s?.showJiraBoard);
-    });
-  }, [showSettings]);
-
-  // Fire OS notifications and sounds for permission prompts + session completion
-  useNotifications({
-    pendingPermission: manager.pendingPermission,
-    notificationSettings,
-    activeSessionId: manager.activeSessionId,
-    isProcessing: manager.isProcessing,
-  });
-
-  // When settings closes, fire resize so hidden tool panels (xterm) re-fit
-  useEffect(() => {
-    if (!showSettings) window.dispatchEvent(new Event("resize"));
-  }, [showSettings]);
-
-  const [spaceCreatorOpen, setSpaceCreatorOpen] = useState(false);
-  const [editingSpace, setEditingSpace] = useState<Space | null>(null);
-  const [scrollToMessageId, setScrollToMessageId] = useState<string | undefined>();
-  // In-chat Ctrl+F / Cmd+F search overlay
-  const [chatSearchOpen, setChatSearchOpen] = useState(false);
   const spaceTerminals = useSpaceTerminals();
-
-  const hasProjects = projectManager.projects.length > 0;
 
   // ── Tool toggle with suppression ──
 
@@ -242,9 +84,6 @@ export function useAppOrchestrator() {
   // Reorder panel tools in the ToolPicker (moves fromId to toId's position)
   const handleToolReorder = useCallback(
     (fromId: ToolId, toId: ToolId) => {
-      const count = settings.toolOrder.filter(
-        (id) => settings.activeTools.has(id) && COLUMN_TOOL_IDS.has(id),
-      ).length;
       settings.setToolOrder((prev) => {
         const next = [...prev];
         const fromIdx = next.indexOf(fromId);
@@ -254,280 +93,68 @@ export function useAppOrchestrator() {
         next.splice(toIdx, 0, fromId);
         return next;
       });
-      // Reset split ratios to equal when reordering (positional, not keyed)
-      if (count > 1) {
-        settings.setToolsSplitRatios(new Array<number>(count).fill(1 / count));
-        settings.saveToolsSplitRatios();
-      }
     },
     [settings],
   );
+  const environment = useAppEnvironmentState({
+    macBackgroundEffect: settings.macBackgroundEffect,
+    setMacBackgroundEffect: settings.setMacBackgroundEffect,
+    transparency: settings.transparency,
+    theme: settings.theme,
+    pendingPermission: manager.pendingPermission,
+    activeSessionId: manager.activeSessionId,
+    isProcessing: manager.isProcessing,
+  });
 
-  const handleNewChat = useCallback(
-    async (projectId: string) => {
-      setShowSettings(false);
-      const agent = selectedAgent;
-      const wantedEngine = agent?.engine ?? "claude";
-      const wantedModel = settings.getModelForEngine(wantedEngine) || undefined;
-      await manager.createSession(projectId, {
-        model: wantedModel,
-        permissionMode: settings.permissionMode,
-        planMode: settings.planMode,
-        thinkingEnabled: settings.thinking,
-        effort: wantedEngine === "claude" ? getClaudeEffortForModel(wantedModel) : undefined,
-        engine: wantedEngine,
-        agentId: agent?.id ?? "claude-code",
-        cachedConfigOptions: agent?.cachedConfigOptions,
-      });
-    },
-    [manager.createSession, settings.getModelForEngine, settings.permissionMode, settings.planMode, settings.thinking, getClaudeEffortForModel, selectedAgent],
-  );
+  const sessionActions = useAppSessionActions({
+    manager,
+    settings,
+    selectedAgent,
+    setSelectedAgent,
+    setShowSettings: environment.setShowSettings,
+    refreshAgents,
+    activeSpaceId: spaceManager.activeSpaceId,
+    projectManager,
+  });
 
-  const handleSend = useCallback(
-    async (text: string, images?: ImageAttachment[], displayText?: string) => {
-      // If the selected agent/engine differs from the current session, start a new session first
-      const currentEngine = manager.activeSession?.engine ?? "claude";
-      const wantedEngine = selectedAgent?.engine ?? "claude";
-      const currentAgentId = manager.activeSession?.agentId;
-      const wantedAgentId = selectedAgent?.id;
-      const wantedModel = settings.getModelForEngine(wantedEngine);
-      const needsNewSession = !manager.isDraft && manager.activeSession && (
-        currentEngine !== wantedEngine ||
-        // Switching ACP agents within a session must also create a new chat
-        (currentEngine === "acp" && wantedEngine === "acp" && currentAgentId !== wantedAgentId)
-      );
-      if (needsNewSession) {
-        await manager.createSession(manager.activeSession!.projectId, {
-          model: wantedModel || undefined,
-          permissionMode: settings.permissionMode,
-          planMode: settings.planMode,
-          thinkingEnabled: settings.thinking,
-          effort: wantedEngine === "claude" ? getClaudeEffortForModel(wantedModel || undefined) : undefined,
-          engine: wantedEngine,
-          agentId: selectedAgent?.id ?? "claude-code",
-          cachedConfigOptions: selectedAgent?.cachedConfigOptions,
-        });
-      }
-      await manager.send(text, images, displayText);
-    },
-    [manager.send, manager.isDraft, manager.activeSession, manager.createSession, selectedAgent, settings.getModelForEngine, settings.permissionMode, settings.planMode, settings.thinking, getClaudeEffortForModel],
-  );
+  const spaceWorkflow = useAppSpaceWorkflow({
+    projectManager,
+    spaceManager,
+    manager,
+    splitView,
+    handleNewChat: sessionActions.handleNewChat,
+    destroySpaceTerminals: spaceTerminals.destroySpaceTerminals,
+  });
 
-  const handleModelChange = useCallback(
-    (nextModel: string) => {
-      settings.setModel(nextModel);
-      manager.setActiveModel(nextModel);
-      if (settingsEngine !== "claude") return;
-      const nextEffort = getClaudeEffortForModel(nextModel);
-      if (!nextEffort || nextEffort === settings.claudeEffort) return;
-      settings.setClaudeEffort(nextEffort);
-    },
-    [settings, settingsEngine, manager.setActiveModel, getClaudeEffortForModel],
-  );
+  const contextualState = useAppContextualPanels({
+    manager,
+    settings,
+    isSpaceSwitching: spaceWorkflow.isSpaceSwitching,
+  });
 
-  const handlePermissionModeChange = useCallback(
-    (nextMode: string) => {
-      settings.setPermissionMode(nextMode);
-      manager.setActivePermissionMode(nextMode);
-    },
-    [settings, manager.setActivePermissionMode],
-  );
-
-  const handlePlanModeChange = useCallback(
-    (enabled: boolean) => {
-      settings.setPlanMode(enabled);
-      manager.setActivePlanMode(enabled);
-    },
-    [settings, manager.setActivePlanMode],
-  );
-
-  const handleThinkingChange = useCallback(
-    (enabled: boolean) => {
-      settings.setThinking(enabled);
-      manager.setActiveThinking(enabled);
-    },
-    [settings, manager.setActiveThinking],
-  );
-
-  const handleClaudeModelEffortChange = useCallback(
-    (model: string, effort: ClaudeEffort) => {
-      settings.setModel(model);
-      settings.setClaudeEffort(effort);
-      manager.setActiveClaudeModelAndEffort(model, effort);
-    },
-    [settings, manager.setActiveClaudeModelAndEffort],
-  );
-
-  const handleStop = useCallback(async () => {
-    await manager.interrupt();
-  }, [manager.interrupt]);
-
-  const handleSendQueuedNow = useCallback(async (messageId: string) => {
-    await manager.sendQueuedMessageNext(messageId);
-  }, [manager.sendQueuedMessageNext]);
-
-  const handleUnqueueMessage = useCallback((messageId: string) => {
-    manager.unqueueMessage(messageId);
-  }, [manager.unqueueMessage]);
-
-  // Wrap session selection to also close settings view
-  const handleSelectSession = useCallback(
-    (sessionId: string) => {
-      setShowSettings(false);
-      manager.switchSession(sessionId);
-    },
-    [manager.switchSession],
-  );
-
-  // Wrap project creation to also close settings view, assigning to the active space
-  const handleCreateProject = useCallback(async () => {
-    setShowSettings(false);
-    await projectManager.createProject(spaceManager.activeSpaceId);
-  }, [projectManager.createProject, spaceManager.activeSpaceId]);
-
-  const handleImportCCSession = useCallback(
-    async (projectId: string, ccSessionId: string) => {
-      await manager.importCCSession(projectId, ccSessionId);
-    },
-    [manager.importCCSession],
-  );
-
-  const handleSeedDevExampleSpaceData = useCallback(async () => {
-    if (!import.meta.env.DEV) return;
-    const { seedDevExampleSpaceData } = await import("@/lib/dev-seeding/space-seeding");
-    await seedDevExampleSpaceData({
-      activeSpaceId: spaceManager.activeSpaceId,
-      existingProjects: projectManager.projects,
-      createDevProject: projectManager.createDevProject,
-      saveSession: window.claude.sessions.save,
-      refreshSessions: manager.refreshSessions,
+  useEffect(() => {
+    const minWidth = getAppMinimumWidth({
+      sidebarOpen: sidebar.isOpen,
+      isIslandLayout: settings.islandLayout,
+      hasActiveSession: !!manager.activeSessionId,
+      hasRightPanel: contextualState.hasRightPanel,
+      hasToolsColumn: contextualState.hasToolsColumn,
+      isSplitViewEnabled: splitView.enabled && splitView.paneCount > 1,
+      splitPaneCount: splitView.paneCount,
+      splitTopRowItemKinds: splitView.topRowItems.map((item) => item.kind),
+      isWindows,
     });
-  }, [spaceManager.activeSpaceId, projectManager.projects, projectManager.createDevProject, manager.refreshSessions]);
-
-  const handleNavigateToMessage = useCallback(
-    (sessionId: string, messageId: string) => {
-      manager.switchSession(sessionId);
-      setTimeout(() => setScrollToMessageId(messageId), 200);
-    },
-    [manager.switchSession],
-  );
-
-  const handleCreateSpace = useCallback(() => {
-    setEditingSpace(null);
-    setSpaceCreatorOpen(true);
-  }, []);
-
-  const handleEditSpace = useCallback((space: Space) => {
-    setEditingSpace(space);
-    setSpaceCreatorOpen(true);
-  }, []);
-
-  const handleDeleteSpace = useCallback(
-    async (id: string) => {
-      const deletedId = await spaceManager.deleteSpace(id);
-      if (deletedId) {
-        await spaceTerminals.destroySpaceTerminals(deletedId);
-        for (const p of projectManager.projects) {
-          if (p.spaceId === deletedId) {
-            await projectManager.updateProjectSpace(p.id, "default");
-          }
-        }
-      }
-    },
-    [spaceManager.deleteSpace, spaceTerminals, projectManager.projects, projectManager.updateProjectSpace],
-  );
-
-  const handleSaveSpace = useCallback(
-    async (name: string, icon: string, iconType: "emoji" | "lucide", color: SpaceColor) => {
-      if (editingSpace) {
-        await spaceManager.updateSpace(editingSpace.id, { name, icon, iconType, color });
-      } else {
-        await spaceManager.createSpace(name, icon, iconType, color);
-      }
-    },
-    [editingSpace, spaceManager.updateSpace, spaceManager.createSpace],
-  );
-
-  const handleMoveProjectToSpace = useCallback(
-    async (projectId: string, spaceId: string) => {
-      await projectManager.updateProjectSpace(projectId, spaceId);
-    },
-    [projectManager.updateProjectSpace],
-  );
-
-  // ── Space <-> session tracking: switch to last used chat when changing spaces ──
-
-  const prevSpaceIdRef = useRef(spaceManager.activeSpaceId);
-
-  const activeSpaceTerminalCwd = activeSpaceProject
-    ? (getStoredProjectGitCwd(activeSpaceProject.id) ?? activeSpaceProject.path)
-    : null;
-
-  // Save current session as last-used for its owning space whenever it changes.
-  // Use the session's project space (not the currently selected space), because
-  // space switching and session switching can be out of sync for one render.
-  useEffect(() => {
-    if (!manager.activeSessionId || manager.isDraft) return;
-    const active = manager.sessions.find((s) => s.id === manager.activeSessionId);
-    if (!active) return;
-    const project = projectManager.projects.find((p) => p.id === active.projectId);
-    if (!project) return;
-    const sessionSpaceId = project.spaceId || "default";
-    const map = readLastSessionMap();
-    map[sessionSpaceId] = manager.activeSessionId;
-    localStorage.setItem(LAST_SESSION_KEY, JSON.stringify(map));
-  }, [manager.activeSessionId, manager.isDraft, manager.sessions, projectManager.projects, readLastSessionMap]);
-
-  // When activeSpaceId changes, switch to last used session in that space.
-  // Debounced by 60ms to coalesce rapid space switches and prevent race conditions
-  // between concurrent switchSession/createSession calls.
-  useEffect(() => {
-    const prev = prevSpaceIdRef.current;
-    const next = spaceManager.activeSpaceId;
-    prevSpaceIdRef.current = next;
-    if (prev === next) return;
-
-    const timer = setTimeout(() => {
-      // Find projects in the new space
-      const spaceProjectIds = new Set(
-        projectManager.projects
-          .filter((p) => (p.spaceId || "default") === next)
-          .map((p) => p.id),
-      );
-
-      // Check if current session is already in the new space
-      if (manager.activeSession && spaceProjectIds.has(manager.activeSession.projectId)) {
-        return; // Already in the right space
-      }
-
-      // Try to restore the last used session in this space
-      const map = readLastSessionMap();
-      const lastSessionId = map[next];
-      if (lastSessionId) {
-        const session = manager.sessions.find(
-          (s) => s.id === lastSessionId && spaceProjectIds.has(s.projectId),
-        );
-        if (session) {
-          manager.switchSession(session.id);
-          return;
-        }
-      }
-
-      // No remembered chat for this space: open a fresh draft chat in the space.
-      // If the space has no projects, we can't create a draft chat yet.
-      const firstProjectInSpace = projectManager.projects.find(
-        (p) => (p.spaceId || "default") === next,
-      );
-      if (firstProjectInSpace) {
-        void handleNewChat(firstProjectInSpace.id);
-      } else {
-        // No projects in this space — deselect
-        manager.deselectSession();
-      }
-    }, 60);
-
-    return () => clearTimeout(timer);
-  }, [spaceManager.activeSpaceId]); // eslint-disable-line react-hooks/exhaustive-deps
+    window.claude.setMinWidth(Math.max(minWidth, 600));
+  }, [
+    contextualState.hasRightPanel,
+    contextualState.hasToolsColumn,
+    manager.activeSessionId,
+    settings.islandLayout,
+    sidebar.isOpen,
+    splitView.enabled,
+    splitView.paneCount,
+    splitView.topRowItems,
+  ]);
 
   // Sync model from loaded session (canonical runtime names -> picker values)
   useEffect(() => {
@@ -541,6 +168,15 @@ export function useAppOrchestrator() {
       settings.setModelForEngine(sessionEngine, syncedModel);
     }
   }, [manager.activeSessionId, manager.isDraft, manager.sessions, manager.supportedModels, settings.getModelForEngine, settings.setModelForEngine]);
+
+  useEffect(() => {
+    if (!manager.activeSessionId || manager.isDraft) return;
+    const session = manager.sessions.find((s) => s.id === manager.activeSessionId);
+    if (!session || (session.engine ?? "claude") !== "claude" || !session.effort) return;
+    if (session.effort !== settings.claudeEffort) {
+      settings.setClaudeEffort(session.effort);
+    }
+  }, [manager.activeSessionId, manager.isDraft, manager.sessions, settings.claudeEffort, settings.setClaudeEffort]);
 
   // Sync selectedAgent when switching to a different session
   useEffect(() => {
@@ -571,121 +207,26 @@ export function useAppOrchestrator() {
     }
   }, [manager.activeSessionId, manager.isDraft, manager.sessions, agents]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Derive the latest todo list — Codex uses turn/plan/updated events,
-  // Claude uses TodoWrite tool calls in the message stream.
-  // Optimization: only re-scan when messages.length changes (new message added),
-  // not on every streaming content update (which only modifies the last message).
-  const todoMsgCount = manager.messages.length;
-  const activeTodos = useMemo(() => {
-    // Codex engine: todos come from turn/plan/updated events
-    if (manager.codexTodoItems && manager.codexTodoItems.length > 0) {
-      return manager.codexTodoItems;
-    }
-    // Claude engine: todos derived from last TodoWrite tool call in messages
-    for (let i = manager.messages.length - 1; i >= 0; i--) {
-      const msg = manager.messages[i];
-      if (
-        msg.role === "tool_call" &&
-        msg.toolName === "TodoWrite" &&
-        msg.toolInput &&
-        "todos" in msg.toolInput
-      ) {
-        return getTodoItems(msg.toolInput.todos);
-      }
-    }
-    return [];
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [todoMsgCount, manager.codexTodoItems]);
-
-  const bgAgents = useBackgroundAgents({
-    sessionId: manager.activeSessionId,
+  // ── Keyboard shortcuts ──
+  useKeyboardShortcuts({
+    planMode: settings.planMode,
+    setPlanMode: settings.setPlanMode,
+    setActivePlanMode: manager.setActivePlanMode,
+    activeEngine: manager.activeSession?.engine ?? selectedAgent?.engine ?? "claude",
+    activeSessionId: manager.activeSessionId,
+    setChatSearchOpen: environment.setChatSearchOpen,
   });
 
-  // ── Contextual tools (tasks / agents) — auto-activate when data appears ──
-
-  const hasTodos = activeTodos.length > 0;
-  const hasAgents = bgAgents.agents.length > 0;
-
-  const availableContextual = useMemo(() => {
-    const s = new Set<ToolId>();
-    if (hasTodos) s.add("tasks");
-    if (hasAgents) s.add("agents");
-    return s;
-  }, [hasTodos, hasAgents]);
-
-  // Auto-add contextual tools when data appears (unless suppressed)
+  // Sync plan toggle to the active chat session (handles both sessionInfo.permissionMode
+  // changes like ExitPlanMode and session switches).
   useEffect(() => {
-    if (!hasTodos) {
-      // Data gone — clear suppression so next session starts fresh
-      settings.unsuppressPanel("tasks");
-      return;
-    }
-    if (settings.suppressedPanels.has("tasks")) return;
-    settings.setActiveTools((prev) => {
-      if (prev.has("tasks")) return prev;
-      const next = new Set(prev);
-      next.add("tasks");
-      return next;
-    });
-  }, [hasTodos]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!hasAgents) {
-      settings.unsuppressPanel("agents");
-      return;
-    }
-    if (settings.suppressedPanels.has("agents")) return;
-    settings.setActiveTools((prev) => {
-      if (prev.has("agents")) return prev;
-      const next = new Set(prev);
-      next.add("agents");
-      return next;
-    });
-  }, [hasAgents]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Cmd+Shift+P (Mac) / Ctrl+Shift+P — toggle plan mode for Claude and Codex engines
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "p") {
-        e.preventDefault();
-        const engine = manager.activeSession?.engine ?? selectedAgent?.engine ?? "claude";
-        if (engine === "acp") return; // ACP doesn't support plan mode
-        const next = !settings.planMode;
-        settings.setPlanMode(next);
-        manager.setActivePlanMode(next);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [settings.planMode, settings.setPlanMode, manager.setActivePlanMode, manager.activeSession?.engine, selectedAgent?.engine]);
-
-  // Cmd+F (Mac) / Ctrl+F — toggle in-chat search overlay
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "f") {
-        if (!manager.activeSessionId) return;
-        e.preventDefault();
-        setChatSearchOpen((prev) => !prev);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [manager.activeSessionId]);
-
-  // Close chat search when switching sessions
-  useEffect(() => {
-    setChatSearchOpen(false);
-  }, [manager.activeSessionId]);
-
-  // Sync InputBar controls when sessionInfo.permissionMode changes (e.g. ExitPlanMode)
-  useEffect(() => {
-    if (!manager.activeSessionId || manager.isDraft) return;
-    const mode = manager.sessionInfo?.permissionMode;
-    if (!mode) return;
-    const activePlanMode = !!manager.activeSession?.planMode;
-    const nextPlanMode = mode === "plan";
+    if (!manager.activeSessionId || manager.isDraft || !manager.activeSession) return;
+    const nextPlanMode = getSyncedPlanMode(
+      manager.activeSession.planMode,
+      manager.sessionInfo?.permissionMode,
+    );
     if (settings.planMode !== nextPlanMode) settings.setPlanMode(nextPlanMode);
-    if (activePlanMode !== nextPlanMode) {
+    if (!!manager.activeSession.planMode !== nextPlanMode) {
       manager.setActivePlanMode(nextPlanMode);
     }
   }, [
@@ -698,52 +239,109 @@ export function useAppOrchestrator() {
     settings.setPlanMode,
   ]);
 
-  // Keep plan toggle scoped to the active chat session.
-  useEffect(() => {
-    if (!manager.activeSessionId || manager.isDraft || !manager.activeSession) return;
-    const nextPlanMode = !!manager.activeSession.planMode;
-    if (settings.planMode !== nextPlanMode) settings.setPlanMode(nextPlanMode);
-  }, [manager.activeSessionId, manager.activeSession?.planMode, manager.isDraft, settings.planMode, settings.setPlanMode]);
-
-  // Panel visibility flags
-  const hasRightPanel = ((hasTodos && settings.activeTools.has("tasks")) || (hasAgents && settings.activeTools.has("agents"))) && !!manager.activeSessionId;
-  // Side column only includes active COLUMN tools that are NOT placed in the bottom row
-  const hasToolsColumn = [...settings.activeTools].some((id) => COLUMN_TOOL_IDS.has(id) && !settings.bottomTools.has(id)) && !!manager.activeSessionId;
-  // Bottom tools row: active COLUMN tools that ARE placed in the bottom row
-  const hasBottomTools = [...settings.activeTools].some((id) => COLUMN_TOOL_IDS.has(id) && settings.bottomTools.has(id)) && !!manager.activeSessionId;
-
-  // ── Dynamic Electron minimum window width ──
-  const isIsland = settings.islandLayout;
-  const minChatWidth = getMinChatWidth(isIsland);
-  const margins = isIsland ? ISLAND_LAYOUT_MARGIN : 0;
-  const handleW = getResizeHandleWidth(isIsland);
-  const pickerW = getToolPickerWidth(isIsland);
-  // Windows native frame borders consume extra pixels from the content area
-  const winFrameBuffer = isWindows ? WINDOWS_FRAME_BUFFER_WIDTH : 0;
-
-  useEffect(() => {
-    const sidebarW = sidebar.isOpen ? APP_SIDEBAR_WIDTH : 0;
-    let minW = sidebarW + margins + minChatWidth + winFrameBuffer;
-
-    if (manager.activeSessionId) {
-      minW += pickerW;
-      if (hasRightPanel) minW += MIN_RIGHT_PANEL_WIDTH + handleW;
-      if (hasToolsColumn) minW += MIN_TOOLS_PANEL_WIDTH + handleW;
-    }
-
-    window.claude.setMinWidth(Math.max(minW, 600));
-  }, [sidebar.isOpen, hasRightPanel, hasToolsColumn, manager.activeSessionId, minChatWidth, margins, pickerW, handleW]);
-
-  // When tools column or bottom row becomes visible, fire resize so xterm terminals re-fit
-  useEffect(() => {
-    if (hasToolsColumn || hasBottomTools) window.dispatchEvent(new Event("resize"));
-  }, [hasToolsColumn, hasBottomTools]);
-
   const activeSpaceTerminals = spaceTerminals.getSpaceState(spaceManager.activeSpaceId);
 
+  // ── Folder & Pin management ──
+  const folders = useFolderManager({
+    projects: projectManager.projects,
+    setSessions: manager.setSessions,
+  });
+
+  const ui = {
+    showSettings: environment.showSettings,
+    setShowSettings: environment.setShowSettings,
+    scrollToMessageId: environment.scrollToMessageId,
+    setScrollToMessageId: environment.setScrollToMessageId,
+    chatSearchOpen: environment.chatSearchOpen,
+    setChatSearchOpen: environment.setChatSearchOpen,
+  };
+
+  const state = {
+    activeProjectId: spaceWorkflow.activeProjectId,
+    activeProject: spaceWorkflow.activeProject,
+    activeProjectPath: spaceWorkflow.activeProjectPath,
+    activeSpaceProject: spaceWorkflow.activeSpaceProject,
+    activeSpaceTerminalCwd: spaceWorkflow.activeSpaceTerminalCwd,
+    showThinking: true as const,
+    settingsEngine,
+    hasProjects: spaceWorkflow.hasProjects,
+    isSpaceSwitching: spaceWorkflow.isSpaceSwitching,
+    showToolPicker: contextualState.showToolPicker,
+    hasRightPanel: contextualState.hasRightPanel,
+    hasToolsColumn: contextualState.hasToolsColumn,
+    hasBottomTools: contextualState.hasBottomTools,
+    activeTodos: contextualState.activeTodos,
+    bgAgents: contextualState.bgAgents,
+    hasTodos: contextualState.hasTodos,
+    hasAgents: contextualState.hasAgents,
+    availableContextual: contextualState.availableContextual,
+    glassSupported: environment.glassSupported,
+    macLiquidGlassSupported: environment.macLiquidGlassSupported,
+    liveMacBackgroundEffect: environment.liveMacBackgroundEffect,
+    devFillEnabled: environment.devFillEnabled,
+    jiraBoardEnabled: environment.jiraBoardEnabled,
+    draftSpaceId: spaceWorkflow.draftSpaceId,
+  };
+
+  const agentState = {
+    agents,
+    selectedAgent,
+    saveAgent,
+    deleteAgent,
+    handleAgentChange: sessionActions.handleAgentChange,
+    lockedEngine,
+    lockedAgentId,
+  };
+
+  const actions = {
+    handleToggleTool,
+    handleToolReorder,
+    handleNewChat: sessionActions.handleNewChat,
+    handleSend: sessionActions.handleSend,
+    handleModelChange: sessionActions.handleModelChange,
+    handlePermissionModeChange: sessionActions.handlePermissionModeChange,
+    handlePlanModeChange: sessionActions.handlePlanModeChange,
+    handleClaudeModelEffortChange: sessionActions.handleClaudeModelEffortChange,
+    handleAgentWorktreeChange: sessionActions.handleAgentWorktreeChange,
+    handleStop: sessionActions.handleStop,
+    handleSendQueuedNow: sessionActions.handleSendQueuedNow,
+    handleUnqueueMessage: sessionActions.handleUnqueueMessage,
+    handleSelectSession: sessionActions.handleSelectSession,
+    handleCreateProject: sessionActions.handleCreateProject,
+    handleImportCCSession: sessionActions.handleImportCCSession,
+    handleSeedDevExampleSpaceData: sessionActions.handleSeedDevExampleSpaceData,
+    handleNavigateToMessage: (sessionId: string, messageId: string) => sessionActions.handleNavigateToMessage(sessionId, environment.setScrollToMessageId, messageId),
+    handleStartCreateSpace: spaceWorkflow.handleStartCreateSpace,
+    handleConfirmCreateSpace: spaceWorkflow.handleConfirmCreateSpace,
+    handleCancelCreateSpace: spaceWorkflow.handleCancelCreateSpace,
+    handleUpdateSpace: spaceWorkflow.handleUpdateSpace,
+    handleDeleteSpace: spaceWorkflow.handleDeleteSpace,
+    handleMoveProjectToSpace: spaceWorkflow.handleMoveProjectToSpace,
+    ...folders,
+  };
+
+  const managers = {
+    sidebar,
+    splitView,
+    projectManager,
+    spaceManager,
+    manager,
+    settings,
+    resolvedTheme,
+    spaceTerminals,
+    activeSpaceTerminals,
+  };
+
   return {
+    managers,
+    state,
+    ui,
+    agentState,
+    actions,
+
     // Core managers
     sidebar,
+    splitView,
     projectManager,
     spaceManager,
     manager,
@@ -755,47 +353,49 @@ export function useAppOrchestrator() {
     selectedAgent,
     saveAgent,
     deleteAgent,
-    handleAgentChange,
+    handleAgentChange: sessionActions.handleAgentChange,
     lockedEngine,
     lockedAgentId,
 
     // Derived state
-    activeProjectId,
-    activeProject,
-    activeProjectPath,
-    activeSpaceProject,
-    activeSpaceTerminalCwd,
-    showThinking,
+    activeProjectId: spaceWorkflow.activeProjectId,
+    activeProject: spaceWorkflow.activeProject,
+    activeProjectPath: spaceWorkflow.activeProjectPath,
+    activeSpaceProject: spaceWorkflow.activeSpaceProject,
+    activeSpaceTerminalCwd: spaceWorkflow.activeSpaceTerminalCwd,
+    showThinking: true as const,
     settingsEngine,
-    hasProjects,
-    hasRightPanel,
-    hasToolsColumn,
-    hasBottomTools,
-    activeTodos,
-    bgAgents,
-    hasTodos,
-    hasAgents,
-    availableContextual,
-    glassSupported,
-    devFillEnabled,
-    jiraBoardEnabled,
+    hasProjects: spaceWorkflow.hasProjects,
+    isSpaceSwitching: spaceWorkflow.isSpaceSwitching,
+    showToolPicker: contextualState.showToolPicker,
+    hasRightPanel: contextualState.hasRightPanel,
+    hasToolsColumn: contextualState.hasToolsColumn,
+    hasBottomTools: contextualState.hasBottomTools,
+    activeTodos: contextualState.activeTodos,
+    bgAgents: contextualState.bgAgents,
+    hasTodos: contextualState.hasTodos,
+    hasAgents: contextualState.hasAgents,
+    availableContextual: contextualState.availableContextual,
+    glassSupported: environment.glassSupported,
+    macLiquidGlassSupported: environment.macLiquidGlassSupported,
+    liveMacBackgroundEffect: environment.liveMacBackgroundEffect,
+    devFillEnabled: environment.devFillEnabled,
+    jiraBoardEnabled: environment.jiraBoardEnabled,
 
     // Settings view
-    showSettings,
-    setShowSettings,
+    showSettings: ui.showSettings,
+    setShowSettings: ui.setShowSettings,
 
-    // Space creator
-    spaceCreatorOpen,
-    setSpaceCreatorOpen,
-    editingSpace,
+    // Space management (draft = real space, deleted on cancel)
+    draftSpaceId: state.draftSpaceId,
 
     // Scroll navigation
-    scrollToMessageId,
-    setScrollToMessageId,
+    scrollToMessageId: ui.scrollToMessageId,
+    setScrollToMessageId: ui.setScrollToMessageId,
 
     // In-chat search
-    chatSearchOpen,
-    setChatSearchOpen,
+    chatSearchOpen: ui.chatSearchOpen,
+    setChatSearchOpen: ui.setChatSearchOpen,
 
     // Terminals
     spaceTerminals,
@@ -804,26 +404,29 @@ export function useAppOrchestrator() {
     // Callbacks
     handleToggleTool,
     handleToolReorder,
-    handleNewChat,
-    handleSend,
-    handleModelChange,
-    handlePermissionModeChange,
-    handlePlanModeChange,
-    handleThinkingChange,
-    handleClaudeModelEffortChange,
-    handleAgentWorktreeChange,
-    handleStop,
-    handleSendQueuedNow,
-    handleUnqueueMessage,
-    handleSelectSession,
-    handleCreateProject,
-    handleImportCCSession,
-    handleSeedDevExampleSpaceData,
-    handleNavigateToMessage,
-    handleCreateSpace,
-    handleEditSpace,
-    handleDeleteSpace,
-    handleSaveSpace,
-    handleMoveProjectToSpace,
+    handleNewChat: sessionActions.handleNewChat,
+    handleSend: sessionActions.handleSend,
+    handleModelChange: sessionActions.handleModelChange,
+    handlePermissionModeChange: sessionActions.handlePermissionModeChange,
+    handlePlanModeChange: sessionActions.handlePlanModeChange,
+    handleClaudeModelEffortChange: sessionActions.handleClaudeModelEffortChange,
+    handleAgentWorktreeChange: sessionActions.handleAgentWorktreeChange,
+    handleStop: sessionActions.handleStop,
+    handleSendQueuedNow: sessionActions.handleSendQueuedNow,
+    handleUnqueueMessage: sessionActions.handleUnqueueMessage,
+    handleSelectSession: sessionActions.handleSelectSession,
+    handleCreateProject: sessionActions.handleCreateProject,
+    handleImportCCSession: sessionActions.handleImportCCSession,
+    handleSeedDevExampleSpaceData: sessionActions.handleSeedDevExampleSpaceData,
+    handleNavigateToMessage: (sessionId: string, messageId: string) => sessionActions.handleNavigateToMessage(sessionId, environment.setScrollToMessageId, messageId),
+    handleStartCreateSpace: spaceWorkflow.handleStartCreateSpace,
+    handleConfirmCreateSpace: spaceWorkflow.handleConfirmCreateSpace,
+    handleCancelCreateSpace: spaceWorkflow.handleCancelCreateSpace,
+    handleUpdateSpace: spaceWorkflow.handleUpdateSpace,
+    handleDeleteSpace: spaceWorkflow.handleDeleteSpace,
+    handleMoveProjectToSpace: spaceWorkflow.handleMoveProjectToSpace,
+
+    // Folder & Pin management
+    ...folders,
   };
 }

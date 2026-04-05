@@ -29,21 +29,19 @@ export function PanelHeader({
   label,
   children,
   separator = true,
-  className = "px-3 pt-3 pb-2",
+  className = "px-3 py-2",
   iconClass = "text-muted-foreground",
 }: PanelHeaderProps) {
   return (
     <>
-      <div className={`flex items-center gap-2 ${className}`}>
-        <div className="flex h-5 w-5 items-center justify-center rounded-md bg-foreground/[0.04]">
-          {iconNode ?? (Icon && <Icon className={`h-3 w-3 shrink-0 ${iconClass}`} />)}
-        </div>
-        <span className="text-[11px] font-semibold tracking-wide text-muted-foreground/80 uppercase">{label}</span>
-        {children && <div className="ms-auto flex items-center gap-1.5">{children}</div>}
+      <div className={`flex items-center gap-1.5 ${className}`}>
+        {iconNode ?? (Icon && <Icon className={`h-3 w-3 shrink-0 ${iconClass}`} />)}
+        <span className="text-[10px] font-semibold tracking-wider text-muted-foreground/70 uppercase">{label}</span>
+        {children && <div className="ms-auto flex items-center gap-1">{children}</div>}
       </div>
       {separator && (
         <div className="mx-2">
-          <div className="h-px bg-gradient-to-r from-foreground/[0.06] via-foreground/[0.1] to-foreground/[0.06]" />
+          <div className="h-px bg-foreground/[0.06]" />
         </div>
       )}
     </>

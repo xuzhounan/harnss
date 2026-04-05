@@ -1,17 +1,12 @@
 import { ipcMain } from "electron";
 import path from "path";
 import fs from "fs";
+import { execFile } from "child_process";
 import { gitExec, ALWAYS_SKIP } from "../lib/git-exec";
 import { captureEvent } from "../lib/posthog";
 import { reportError } from "../lib/error-utils";
-
-interface DiscoveredRepo {
-  path: string;
-  name: string;
-  isSubRepo: boolean;
-  isWorktree: boolean;
-  isPrimaryWorktree: boolean;
-}
+import { log } from "../lib/logger";
+import type { GitRepoInfo } from "@shared/types/git";
 
 interface RepoMetadata {
   topLevel: string;
@@ -62,6 +57,61 @@ async function readRepoMetadata(cwd: string): Promise<RepoMetadata | null> {
   }
 }
 
+const WORKTREE_SETUP_FILE = ".harnss/worktree.json";
+
+/** Run a shell command in a given cwd, returning stdout. */
+function shellExec(command: string, cwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const shell = process.platform === "win32" ? "cmd.exe" : "/bin/sh";
+    const flag = process.platform === "win32" ? "/c" : "-c";
+    execFile(shell, [flag, command], { cwd, timeout: 120_000 }, (err, stdout, stderr) => {
+      if (err) reject(new Error(stderr?.trim() || err.message));
+      else resolve(stdout);
+    });
+  });
+}
+
+/**
+ * Run post-creation setup commands from .harnss/worktree.json.
+ * Returns an array of { command, ok, output?, error? } per step.
+ * Non-fatal — failures are reported but don't block worktree creation.
+ */
+async function runWorktreeSetup(
+  sourceRepoPath: string,
+  newWorktreePath: string,
+): Promise<{ command: string; ok: boolean; output?: string; error?: string }[]> {
+  const configPath = path.join(sourceRepoPath, WORKTREE_SETUP_FILE);
+  if (!fs.existsSync(configPath)) return [];
+
+  let config: { "setup-worktree"?: string[] };
+  try {
+    config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+  } catch (err) {
+    log("GIT_WORKTREE_SETUP", `Failed to parse ${WORKTREE_SETUP_FILE}: ${err}`);
+    return [];
+  }
+
+  const commands = config["setup-worktree"];
+  if (!Array.isArray(commands) || commands.length === 0) return [];
+
+  const results: { command: string; ok: boolean; output?: string; error?: string }[] = [];
+
+  for (const rawCmd of commands) {
+    // Replace $ROOT_WORKTREE_PATH with the source repo path
+    const cmd = rawCmd.replace(/\$ROOT_WORKTREE_PATH/g, sourceRepoPath);
+    try {
+      const output = await shellExec(cmd, newWorktreePath);
+      results.push({ command: rawCmd, ok: true, output: output.trim() });
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      log("GIT_WORKTREE_SETUP", `Command failed: "${cmd}" → ${errorMsg}`);
+      results.push({ command: rawCmd, ok: false, error: errorMsg });
+    }
+  }
+
+  return results;
+}
+
 /** Validate that a user-provided git ref doesn't look like a flag to prevent argument injection. */
 function validateRef(ref: string): void {
   if (ref.startsWith("-")) {
@@ -72,7 +122,7 @@ function validateRef(ref: string): void {
 export function register(): void {
   ipcMain.handle("git:discover-repos", async (_event, projectPath: string) => {
     const normalizedProjectPath = normalizePath(projectPath);
-    const reposByPath = new Map<string, DiscoveredRepo>();
+    const reposByPath = new Map<string, GitRepoInfo>();
     const candidatePaths = new Set<string>([normalizedProjectPath]);
 
     const upsertRepo = (
@@ -361,7 +411,11 @@ export function register(): void {
       const args = ["worktree", "add", "-b", branch, resolvedPath];
       if (fromRef?.trim()) args.push(fromRef.trim());
       const output = await gitExec(args, cwd);
-      return { ok: true, path: resolvedPath, output };
+
+      // Run post-creation setup from .harnss/worktree.json (non-blocking)
+      const setupResults = await runWorktreeSetup(cwd, resolvedPath);
+
+      return { ok: true, path: resolvedPath, output, setupResults };
     } catch (err) {
       return { error: reportError("GIT_CREATE_WORKTREE_ERR", err) };
     }

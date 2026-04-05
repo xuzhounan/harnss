@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ToolId } from "@/components/ToolPicker";
-import type { AcpPermissionBehavior, ClaudeEffort, EngineId, ThemeOption } from "@/types";
+import type { ToolId } from "@/types/tools";
+import type { AcpPermissionBehavior, ClaudeEffort, EngineId, MacBackgroundEffect, ThemeOption } from "@/types";
 
 // ── Helpers ──
 
@@ -30,6 +30,16 @@ function readBool(key: string, fallback: boolean): boolean {
   return raw === "true";
 }
 
+const IS_MAC_PLATFORM = typeof navigator !== "undefined"
+  && /mac/i.test(navigator.platform);
+
+type MacNativeBackgroundEffect = Exclude<MacBackgroundEffect, "off">;
+
+function persistMacBackgroundEffect(effect: MacNativeBackgroundEffect): void {
+  if (!IS_MAC_PLATFORM || typeof window === "undefined" || !window.claude?.settings) return;
+  void window.claude.settings.set({ macBackgroundEffect: effect });
+}
+
 /** Normalize an array of ratios to sum to 1.0, respecting a per-element minimum. */
 export function normalizeRatios(ratios: number[], count: number, min = 0.1): number[] {
   if (count <= 0) return [];
@@ -49,10 +59,6 @@ export function normalizeRatios(ratios: number[], count: number, min = 0.1): num
 const MIN_RIGHT_PANEL = 200;
 const MAX_RIGHT_PANEL = 500;
 const DEFAULT_RIGHT_PANEL = 288;
-
-const MIN_TOOLS_PANEL = 280;
-const MAX_TOOLS_PANEL = 800;
-const DEFAULT_TOOLS_PANEL = 420;
 
 const MIN_SPLIT = 0.2;
 const MAX_SPLIT = 0.8;
@@ -92,6 +98,10 @@ export interface Settings {
   setTheme: (t: ThemeOption) => void;
   islandLayout: boolean;
   setIslandLayout: (enabled: boolean) => void;
+  islandShine: boolean;
+  setIslandShine: (enabled: boolean) => void;
+  macBackgroundEffect: MacBackgroundEffect;
+  setMacBackgroundEffect: (effect: MacBackgroundEffect) => void;
   transparency: boolean;
   setTransparency: (enabled: boolean) => void;
   planMode: boolean;
@@ -110,10 +120,16 @@ export interface Settings {
   setAvoidGroupingEdits: (on: boolean) => void;
   autoExpandTools: boolean;
   setAutoExpandTools: (on: boolean) => void;
+  expandEditToolCallsByDefault: boolean;
+  setExpandEditToolCallsByDefault: (on: boolean) => void;
   transparentToolPicker: boolean;
   setTransparentToolPicker: (on: boolean) => void;
   coloredSidebarIcons: boolean;
   setColoredSidebarIcons: (on: boolean) => void;
+  showToolIcons: boolean;
+  setShowToolIcons: (on: boolean) => void;
+  coloredToolIcons: boolean;
+  setColoredToolIcons: (on: boolean) => void;
 
   // Per-project
   model: string;
@@ -127,13 +143,6 @@ export interface Settings {
   rightPanelWidth: number;
   setRightPanelWidth: (w: number) => void;
   saveRightPanelWidth: () => void;
-  toolsPanelWidth: number;
-  setToolsPanelWidth: (w: number) => void;
-  saveToolsPanelWidth: () => void;
-  /** Per-tool fractional heights for the tools column (sum to 1.0) */
-  toolsSplitRatios: number[];
-  setToolsSplitRatios: (r: number[]) => void;
-  saveToolsSplitRatios: () => void;
   /** Display order of panel tools in the tools column */
   toolOrder: ToolId[];
   setToolOrder: (updater: ToolId[] | ((prev: ToolId[]) => ToolId[])) => void;
@@ -148,36 +157,15 @@ export interface Settings {
   unsuppressPanel: (id: ToolId) => void;
   /** Tools placed in the bottom row instead of the right column */
   bottomTools: Set<ToolId>;
-  moveToolToBottom: (id: ToolId) => void;
-  moveToolToSide: (id: ToolId) => void;
   bottomToolsHeight: number;
   setBottomToolsHeight: (h: number) => void;
   saveBottomToolsHeight: () => void;
   bottomToolsSplitRatios: number[];
   setBottomToolsSplitRatios: (r: number[]) => void;
   saveBottomToolsSplitRatios: () => void;
-}
-
-/** Read toolsSplitRatios, with migration from the old single-ratio key */
-function readToolsSplitRatios(pid: string): number[] {
-  const newKey = `harnss-${pid}-tools-split-ratios`;
-  const existing = readJson<number[]>(newKey, []);
-  if (existing.length > 0) return existing;
-
-  // Migrate from old single-ratio key
-  const oldKey = `harnss-${pid}-tools-split`;
-  const oldRaw = localStorage.getItem(oldKey);
-  if (oldRaw !== null) {
-    const ratio = Number(oldRaw);
-    if (Number.isFinite(ratio)) {
-      const migrated = [Math.max(MIN_SPLIT, Math.min(MAX_SPLIT, ratio)), 1 - Math.max(MIN_SPLIT, Math.min(MAX_SPLIT, ratio))];
-      localStorage.setItem(newKey, JSON.stringify(migrated));
-      localStorage.removeItem(oldKey);
-      return migrated;
-    }
-  }
-
-  return []; // will be normalized to equal split by normalizeRatios()
+  /** Whether to group sidebar chats by git branch (per-project, default false). */
+  organizeByChatBranch: boolean;
+  setOrganizeByChatBranch: (on: boolean) => void;
 }
 
 /** Ensure toolOrder contains all known panel tools (filling in any missing ones) */
@@ -235,8 +223,6 @@ function readEngineModels(pid: string): Record<EngineId, string> {
 
 interface ProjectLayoutState {
   rightPanelWidth: number;
-  toolsPanelWidth: number;
-  toolsSplitRatios: number[];
   rightSplitRatio: number;
   bottomToolsHeight: number;
   bottomToolsSplitRatios: number[];
@@ -247,8 +233,6 @@ const projectLayoutCache = new Map<string, ProjectLayoutState>();
 function cloneProjectLayoutState(state: ProjectLayoutState): ProjectLayoutState {
   return {
     rightPanelWidth: state.rightPanelWidth,
-    toolsPanelWidth: state.toolsPanelWidth,
-    toolsSplitRatios: [...state.toolsSplitRatios],
     rightSplitRatio: state.rightSplitRatio,
     bottomToolsHeight: state.bottomToolsHeight,
     bottomToolsSplitRatios: [...state.bottomToolsSplitRatios],
@@ -261,8 +245,6 @@ function readProjectLayoutState(pid: string): ProjectLayoutState {
 
   const loaded: ProjectLayoutState = {
     rightPanelWidth: readNumber(`harnss-${pid}-right-panel-width`, DEFAULT_RIGHT_PANEL, MIN_RIGHT_PANEL, MAX_RIGHT_PANEL),
-    toolsPanelWidth: readNumber(`harnss-${pid}-tools-panel-width`, DEFAULT_TOOLS_PANEL, MIN_TOOLS_PANEL, MAX_TOOLS_PANEL),
-    toolsSplitRatios: readToolsSplitRatios(pid),
     rightSplitRatio: readNumber(`harnss-${pid}-right-split`, DEFAULT_SPLIT, MIN_SPLIT, MAX_SPLIT),
     bottomToolsHeight: readNumber(`harnss-${pid}-bottom-tools-height`, DEFAULT_BOTTOM_HEIGHT, MIN_BOTTOM_HEIGHT, MAX_BOTTOM_HEIGHT),
     bottomToolsSplitRatios: readJson<number[]>(`harnss-${pid}-bottom-tools-split-ratios`, []),
@@ -298,13 +280,59 @@ export function useSettings(projectId: string | null, engine: EngineId = "claude
     localStorage.setItem("harnss-island-layout", String(enabled));
   }, []);
 
-  const [transparency, setTransparencyRaw] = useState(() =>
+  const [islandShine, setIslandShineRaw] = useState(() =>
+    readBool("harnss-island-shine", true),
+  );
+  const setIslandShine = useCallback((enabled: boolean) => {
+    setIslandShineRaw(enabled);
+    localStorage.setItem("harnss-island-shine", String(enabled));
+  }, []);
+
+  const [macNativeBackgroundEffect, setMacNativeBackgroundEffectRaw] = useState<MacNativeBackgroundEffect>("liquid-glass");
+  const [transparencyRaw, setTransparencyRaw] = useState(() =>
     readBool("harnss-transparency", true),
   );
+  useEffect(() => {
+    if (!IS_MAC_PLATFORM || typeof window === "undefined" || !window.claude?.settings) return;
+    let cancelled = false;
+
+    window.claude.settings.get().then((appSettings) => {
+      if (cancelled) return;
+      setMacNativeBackgroundEffectRaw(
+        appSettings?.macBackgroundEffect === "vibrancy" ? "vibrancy" : "liquid-glass",
+      );
+    }).catch(() => {
+      // Keep the default when app settings are unavailable.
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const macBackgroundEffect: MacBackgroundEffect = IS_MAC_PLATFORM
+    ? (transparencyRaw ? macNativeBackgroundEffect : "off")
+    : (transparencyRaw ? "liquid-glass" : "off");
+  const setMacBackgroundEffect = useCallback((effect: MacBackgroundEffect) => {
+    if (effect === "off") {
+      setTransparencyRaw(false);
+      localStorage.setItem("harnss-transparency", "false");
+      return;
+    }
+
+    setMacNativeBackgroundEffectRaw(effect);
+    setTransparencyRaw(true);
+    localStorage.setItem("harnss-transparency", "true");
+    persistMacBackgroundEffect(effect);
+  }, []);
+  const transparency = transparencyRaw;
   const setTransparency = useCallback((enabled: boolean) => {
     setTransparencyRaw(enabled);
     localStorage.setItem("harnss-transparency", String(enabled));
-  }, []);
+    if (IS_MAC_PLATFORM && enabled) {
+      persistMacBackgroundEffect(macNativeBackgroundEffect);
+    }
+  }, [macNativeBackgroundEffect]);
 
   const [planMode, setPlanModeRaw] = useState(() => {
     const stored = localStorage.getItem("harnss-plan-mode");
@@ -392,6 +420,14 @@ export function useSettings(projectId: string | null, engine: EngineId = "claude
     localStorage.setItem("harnss-auto-expand-tools", String(on));
   }, []);
 
+  const [expandEditToolCallsByDefault, setExpandEditToolCallsByDefaultRaw] = useState(() =>
+    readBool("harnss-expand-edit-tool-calls-by-default", true),
+  );
+  const setExpandEditToolCallsByDefault = useCallback((on: boolean) => {
+    setExpandEditToolCallsByDefaultRaw(on);
+    localStorage.setItem("harnss-expand-edit-tool-calls-by-default", String(on));
+  }, []);
+
   const [transparentToolPicker, setTransparentToolPickerRaw] = useState(() =>
     readBool("harnss-transparent-tool-picker", false),
   );
@@ -406,6 +442,22 @@ export function useSettings(projectId: string | null, engine: EngineId = "claude
   const setColoredSidebarIcons = useCallback((on: boolean) => {
     setColoredSidebarIconsRaw(on);
     localStorage.setItem("harnss-colored-sidebar-icons", String(on));
+  }, []);
+
+  const [showToolIcons, setShowToolIconsRaw] = useState(() =>
+    readBool("harnss-show-tool-icons", true),
+  );
+  const setShowToolIcons = useCallback((on: boolean) => {
+    setShowToolIconsRaw(on);
+    localStorage.setItem("harnss-show-tool-icons", String(on));
+  }, []);
+
+  const [coloredToolIcons, setColoredToolIconsRaw] = useState(() =>
+    readBool("harnss-colored-tool-icons", false),
+  );
+  const setColoredToolIcons = useCallback((on: boolean) => {
+    setColoredToolIconsRaw(on);
+    localStorage.setItem("harnss-colored-tool-icons", String(on));
   }, []);
 
   // ── Per-project settings ──
@@ -490,40 +542,6 @@ export function useSettings(projectId: string | null, engine: EngineId = "claude
   const saveRightPanelWidth = useCallback(() => {
     writeProjectLayoutState(pid, { ...readProjectLayoutState(pid), rightPanelWidth: rightPanelWidthRef.current });
     localStorage.setItem(`harnss-${pid}-right-panel-width`, String(rightPanelWidthRef.current));
-  }, [pid]);
-
-  const toolsPanelWidth = currentLayout.toolsPanelWidth;
-  const setToolsPanelWidth = useCallback((width: number) => {
-    setLayoutState((prev) => {
-      const base = prev.pid === pid ? prev.values : readProjectLayoutState(pid);
-      const next = { ...base, toolsPanelWidth: width };
-      writeProjectLayoutState(pid, next);
-      return { pid, values: next };
-    });
-  }, [pid]);
-  const toolsPanelWidthRef = useRef(toolsPanelWidth);
-  toolsPanelWidthRef.current = toolsPanelWidth;
-  const saveToolsPanelWidth = useCallback(() => {
-    writeProjectLayoutState(pid, { ...readProjectLayoutState(pid), toolsPanelWidth: toolsPanelWidthRef.current });
-    localStorage.setItem(`harnss-${pid}-tools-panel-width`, String(toolsPanelWidthRef.current));
-  }, [pid]);
-
-  // ── Tools split ratios (replaces old single toolsSplitRatio) ──
-
-  const toolsSplitRatios = currentLayout.toolsSplitRatios;
-  const toolsSplitRatiosRef = useRef(toolsSplitRatios);
-  toolsSplitRatiosRef.current = toolsSplitRatios;
-  const setToolsSplitRatios = useCallback((ratios: number[]) => {
-    setLayoutState((prev) => {
-      const base = prev.pid === pid ? prev.values : readProjectLayoutState(pid);
-      const next = { ...base, toolsSplitRatios: [...ratios] };
-      writeProjectLayoutState(pid, next);
-      return { pid, values: next };
-    });
-  }, [pid]);
-  const saveToolsSplitRatios = useCallback(() => {
-    writeProjectLayoutState(pid, { ...readProjectLayoutState(pid), toolsSplitRatios: [...toolsSplitRatiosRef.current] });
-    localStorage.setItem(`harnss-${pid}-tools-split-ratios`, JSON.stringify(toolsSplitRatiosRef.current));
   }, [pid]);
 
   // ── Tool order (display order in the tools column) ──
@@ -613,30 +631,6 @@ export function useSettings(projectId: string | null, engine: EngineId = "claude
     const arr = readJson<ToolId[]>(`harnss-${pid}-bottom-tools`, []).filter((id) => VALID_TOOL_IDS.has(id));
     return new Set(arr);
   });
-  const moveToolToBottom = useCallback(
-    (id: ToolId) => {
-      setBottomToolsRaw((prev) => {
-        const next = new Set(prev);
-        next.add(id);
-        localStorage.setItem(`harnss-${pid}-bottom-tools`, JSON.stringify([...next]));
-        return next;
-      });
-    },
-    [pid],
-  );
-  const moveToolToSide = useCallback(
-    (id: ToolId) => {
-      setBottomToolsRaw((prev) => {
-        if (!prev.has(id)) return prev;
-        const next = new Set(prev);
-        next.delete(id);
-        localStorage.setItem(`harnss-${pid}-bottom-tools`, JSON.stringify([...next]));
-        return next;
-      });
-    },
-    [pid],
-  );
-
   const bottomToolsHeight = currentLayout.bottomToolsHeight;
   const setBottomToolsHeight = useCallback((height: number) => {
     setLayoutState((prev) => {
@@ -669,6 +663,16 @@ export function useSettings(projectId: string | null, engine: EngineId = "claude
     localStorage.setItem(`harnss-${pid}-bottom-tools-split-ratios`, JSON.stringify(bottomToolsSplitRatiosRef.current));
   }, [pid]);
 
+  // ── Per-project sidebar organization ──
+
+  const [organizeByChatBranch, setOrganizeByChatBranchRaw] = useState(() =>
+    readBool(`harnss-${pid}-organize-by-branch`, false),
+  );
+  const setOrganizeByChatBranch = useCallback((on: boolean) => {
+    setOrganizeByChatBranchRaw(on);
+    localStorage.setItem(`harnss-${pid}-organize-by-branch`, String(on));
+  }, [pid]);
+
   // ── Re-read per-project values when projectId changes ──
 
   useEffect(() => {
@@ -687,6 +691,8 @@ export function useSettings(projectId: string | null, engine: EngineId = "claude
 
     const bottom = readJson<ToolId[]>(`harnss-${pid}-bottom-tools`, []).filter((id) => VALID_TOOL_IDS.has(id as ToolId));
     setBottomToolsRaw(new Set(bottom));
+
+    setOrganizeByChatBranchRaw(readBool(`harnss-${pid}-organize-by-branch`, false));
   }, [pid]);
 
   return {
@@ -694,6 +700,10 @@ export function useSettings(projectId: string | null, engine: EngineId = "claude
     setTheme,
     islandLayout,
     setIslandLayout,
+    islandShine,
+    setIslandShine,
+    macBackgroundEffect,
+    setMacBackgroundEffect,
     transparency,
     setTransparency,
     planMode,
@@ -712,10 +722,16 @@ export function useSettings(projectId: string | null, engine: EngineId = "claude
     setAvoidGroupingEdits,
     autoExpandTools,
     setAutoExpandTools,
+    expandEditToolCallsByDefault,
+    setExpandEditToolCallsByDefault,
     transparentToolPicker,
     setTransparentToolPicker,
     coloredSidebarIcons,
     setColoredSidebarIcons,
+    showToolIcons,
+    setShowToolIcons,
+    coloredToolIcons,
+    setColoredToolIcons,
     model,
     setModel,
     getModelForEngine,
@@ -727,12 +743,6 @@ export function useSettings(projectId: string | null, engine: EngineId = "claude
     rightPanelWidth,
     setRightPanelWidth,
     saveRightPanelWidth,
-    toolsPanelWidth,
-    setToolsPanelWidth,
-    saveToolsPanelWidth,
-    toolsSplitRatios,
-    setToolsSplitRatios,
-    saveToolsSplitRatios,
     toolOrder,
     setToolOrder,
     rightSplitRatio,
@@ -744,13 +754,13 @@ export function useSettings(projectId: string | null, engine: EngineId = "claude
     suppressPanel,
     unsuppressPanel,
     bottomTools,
-    moveToolToBottom,
-    moveToolToSide,
     bottomToolsHeight,
     setBottomToolsHeight,
     saveBottomToolsHeight,
     bottomToolsSplitRatios,
     setBottomToolsSplitRatios,
     saveBottomToolsSplitRatios,
+    organizeByChatBranch,
+    setOrganizeByChatBranch,
   };
 }

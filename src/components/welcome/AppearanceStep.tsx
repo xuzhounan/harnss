@@ -1,6 +1,7 @@
 import { motion } from "motion/react";
 import { Sun, Moon, Monitor, Blend, Layers, ChevronsUpDown } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import { useSettingsStore } from "@/stores/settings-store";
 import type { AppearanceStepProps } from "./shared";
 import type { ThemeOption } from "@/types";
 
@@ -136,18 +137,20 @@ function FlatMockup() {
 }
 
 export function AppearanceStep({
-  theme,
-  onThemeChange,
-  islandLayout,
-  onIslandLayoutChange,
-  autoGroupTools,
-  onAutoGroupToolsChange,
-  autoExpandTools,
-  onAutoExpandToolsChange,
-  transparency,
-  onTransparencyChange,
   glassSupported,
 }: AppearanceStepProps) {
+  const theme = useSettingsStore((s) => s.theme);
+  const onThemeChange = useSettingsStore((s) => s.setTheme);
+  const islandLayout = useSettingsStore((s) => s.islandLayout);
+  const onIslandLayoutChange = useSettingsStore((s) => s.setIslandLayout);
+  const autoGroupTools = useSettingsStore((s) => s.autoGroupTools);
+  const onAutoGroupToolsChange = useSettingsStore((s) => s.setAutoGroupTools);
+  const autoExpandTools = useSettingsStore((s) => s.autoExpandTools);
+  const onAutoExpandToolsChange = useSettingsStore((s) => s.setAutoExpandTools);
+  const expandEditToolCallsByDefault = useSettingsStore((s) => s.expandEditToolCallsByDefault);
+  const onExpandEditToolCallsByDefaultChange = useSettingsStore((s) => s.setExpandEditToolCallsByDefault);
+  const transparency = useSettingsStore((s) => s.transparency);
+  const onTransparencyChange = useSettingsStore((s) => s.setTransparency);
   return (
     <div className="flex flex-1 flex-col overflow-y-auto px-8">
       <div className="m-auto flex w-full max-w-lg flex-col py-10">
@@ -291,6 +294,23 @@ export function AppearanceStep({
             <Switch
               checked={autoExpandTools}
               onCheckedChange={onAutoExpandToolsChange}
+            />
+          </div>
+          <div className="flex items-center justify-between rounded-xl bg-foreground/[0.03] px-5 py-4">
+            <div className="flex items-center gap-3">
+              <ChevronsUpDown className="h-4.5 w-4.5 text-muted-foreground" />
+              <div>
+                <div className="text-sm font-medium text-foreground">
+                  Expand Edit and Write tools by default
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Start file edit tool calls open instead of collapsed.
+                </div>
+              </div>
+            </div>
+            <Switch
+              checked={expandEditToolCallsByDefault}
+              onCheckedChange={onExpandEditToolCallsByDefaultChange}
             />
           </div>
         </motion.div>

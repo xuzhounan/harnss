@@ -117,6 +117,9 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
   ipcMain.handle("terminal:resize", (_event, { terminalId, cols, rows }: { terminalId: string; cols: number; rows: number }) => {
     const term = terminals.get(terminalId);
     if (!term) return { error: "Terminal not found" };
+    if (term.cols === cols && term.rows === rows) {
+      return { ok: true };
+    }
     if (term.exited) {
       term.cols = cols;
       term.rows = rows;
@@ -138,6 +141,8 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
     return {
       output: readTerminalHistory(term.history),
       seq: term.seq,
+      cols: term.cols,
+      rows: term.rows,
       exited: term.exited,
       exitCode: term.exitCode,
     };

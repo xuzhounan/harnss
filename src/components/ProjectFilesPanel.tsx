@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   FolderTree,
   ChevronRight,
@@ -7,10 +7,25 @@ import {
   FolderOpen,
   RefreshCw,
   Search,
+  Copy,
+  ClipboardCopy,
+  ExternalLink,
+  Eye,
+  FolderSearch,
+  Pencil,
+  Trash2,
+  FilePlus,
+  FolderPlus,
+  Type,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { PanelHeader } from "@/components/PanelHeader";
 import { OpenInEditorButton } from "./OpenInEditorButton";
 import { useProjectFiles } from "@/hooks/useProjectFiles";
@@ -21,6 +36,8 @@ import {
   collectDirPaths,
   type FileTreeNode,
 } from "@/lib/file-tree";
+import { copyToClipboard } from "@/lib/clipboard";
+import { isMac } from "@/lib/utils";
 
 // ── File icon by extension ──
 
@@ -49,12 +66,22 @@ function getFileIconColor(extension?: string): string {
   return EXTENSION_ICON_COLORS[extension] ?? "text-muted-foreground/70";
 }
 
+const REVEAL_LABEL = isMac ? "Reveal in Finder" : "Show in Explorer";
+const TRASH_LABEL = isMac ? "Move to Trash" : "Move to Recycle Bin";
+
+/** Get the parent directory of a path (e.g. "src/lib/foo.ts" → "src/lib"). */
+function dirname(p: string): string {
+  const idx = p.lastIndexOf("/");
+  return idx === -1 ? "" : p.slice(0, idx);
+}
+
 // ── Props ──
 
 interface ProjectFilesPanelProps {
   cwd?: string;
   enabled: boolean;
   onPreviewFile?: (filePath: string, sourceRect: DOMRect) => void;
+  headerControls?: React.ReactNode;
 }
 
 // ── Component ──
@@ -63,6 +90,7 @@ export const ProjectFilesPanel = memo(function ProjectFilesPanel({
   cwd,
   enabled,
   onPreviewFile,
+  headerControls,
 }: ProjectFilesPanelProps) {
   const { tree, loading, error, refresh } = useProjectFiles(cwd, enabled);
 
@@ -70,6 +98,9 @@ export const ProjectFilesPanel = memo(function ProjectFilesPanel({
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  // Inline creation state: { parentDir (relative), type }
+  const [creating, setCreating] = useState<{ parentDir: string; type: "file" | "folder" } | null>(null);
 
   // Debounce search input
   const handleSearchChange = useCallback((value: string) => {
@@ -123,12 +154,50 @@ export const ProjectFilesPanel = memo(function ProjectFilesPanel({
     [cwd, onPreviewFile],
   );
 
+  // Start inline creation under a directory
+  const handleStartCreate = useCallback((parentDir: string, type: "file" | "folder") => {
+    // Ensure the parent is expanded so the inline input is visible
+    setExpandedDirs((prev) => {
+      if (prev.has(parentDir)) return prev;
+      const next = new Set(prev);
+      next.add(parentDir);
+      return next;
+    });
+    setCreating({ parentDir, type });
+  }, []);
+
+  // Commit inline creation
+  const handleCommitCreate = useCallback(async (name: string) => {
+    if (!cwd || !creating) return;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setCreating(null);
+      return;
+    }
+    const fullPath = `${cwd}/${creating.parentDir ? `${creating.parentDir}/` : ""}${trimmed}`;
+    const result = creating.type === "file"
+      ? await window.claude.newFile(fullPath)
+      : await window.claude.newFolder(fullPath);
+
+    setCreating(null);
+    if (result.ok) {
+      refresh();
+    }
+  }, [cwd, creating, refresh]);
+
+  const handleCancelCreate = useCallback(() => {
+    setCreating(null);
+  }, []);
+
   if (!cwd) {
     return (
       <div className="flex h-full flex-col">
-        <PanelHeader icon={FolderTree} label="Project Files" iconClass="text-teal-600/70 dark:text-teal-200/50" />
-        <div className="flex flex-1 items-center justify-center p-4">
-          <p className="text-xs text-muted-foreground">No project selected</p>
+        <PanelHeader icon={FolderTree} label="Project Files" iconClass="text-teal-600/70 dark:text-teal-200/50">
+          {headerControls}
+        </PanelHeader>
+        <div className="flex flex-1 flex-col items-center justify-center gap-1">
+          <FolderTree className="h-3.5 w-3.5 text-foreground/15" />
+          <p className="text-[10px] text-foreground/30">No project selected</p>
         </div>
       </div>
     );
@@ -138,59 +207,55 @@ export const ProjectFilesPanel = memo(function ProjectFilesPanel({
     <div className="flex h-full flex-col">
       <PanelHeader icon={FolderTree} label="Project Files" iconClass="text-teal-600/70 dark:text-teal-200/50">
         {totalFiles > 0 && (
-          <Badge variant="secondary" className="h-5 rounded-full px-2 text-[10px] font-semibold tabular-nums">
-            {totalFiles}
-          </Badge>
+          <span className="text-[10px] tabular-nums text-foreground/35">{totalFiles}</span>
         )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={refresh}
-              className="inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-md
-                text-muted-foreground/50 transition-all duration-150
-                hover:text-muted-foreground hover:bg-foreground/[0.06]
-                active:scale-90"
-            >
-              <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" sideOffset={4}>
-            <p className="text-xs">Refresh files</p>
-          </TooltipContent>
-        </Tooltip>
+        <button
+          type="button"
+          onClick={refresh}
+          className="inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-md
+            text-foreground/35 transition-colors
+            hover:text-foreground/60 hover:bg-foreground/[0.06]"
+          title="Refresh files"
+        >
+          <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
+        </button>
+        {headerControls}
       </PanelHeader>
 
       {/* Search bar */}
-      <div className="flex items-center gap-1.5 border-b border-foreground/[0.08] px-3 py-1.5">
-        <Search className="h-3 w-3 shrink-0 text-muted-foreground/50" />
+      <div className="flex items-center gap-1.5 px-3 py-1">
+        <Search className="h-3 w-3 shrink-0 text-foreground/25" />
         <input
           type="text"
           value={searchQuery}
           onChange={(e) => handleSearchChange(e.target.value)}
-          placeholder="Search files..."
-          className="h-5 w-full bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground/40"
+          placeholder="Search files…"
+          className="h-5 w-full bg-transparent text-[11px] text-foreground/75 outline-none placeholder:text-foreground/25"
         />
+      </div>
+      <div className="mx-2">
+        <div className="h-px bg-foreground/[0.06]" />
       </div>
 
       {/* Tree content */}
       <ScrollArea className="flex-1 min-h-0">
         {loading && !tree && (
-          <div className="flex items-center justify-center p-8">
-            <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground/50" />
+          <div className="flex flex-col items-center justify-center gap-1 py-6">
+            <RefreshCw className="h-3 w-3 animate-spin text-foreground/25" />
+            <p className="text-[10px] text-foreground/30">Loading…</p>
           </div>
         )}
 
         {error && (
-          <div className="p-4">
-            <p className="text-xs text-destructive">{error}</p>
+          <div className="px-3 py-2">
+            <p className="text-[10px] text-destructive">{error}</p>
           </div>
         )}
 
         {flatItems.length === 0 && !loading && !error && tree && (
-          <div className="flex items-center justify-center p-8">
-            <p className="text-xs text-muted-foreground/50">
-              {debouncedQuery ? `No files matching "${debouncedQuery}"` : "No files found"}
+          <div className="flex items-center justify-center py-6">
+            <p className="text-[10px] text-foreground/30">
+              {debouncedQuery ? `No matches for "${debouncedQuery}"` : "No files found"}
             </p>
           </div>
         )}
@@ -205,13 +270,95 @@ export const ProjectFilesPanel = memo(function ProjectFilesPanel({
               cwd={cwd}
               onToggleDir={toggleDir}
               onFileClick={handleFileClick}
+              onRefresh={refresh}
+              onStartCreate={handleStartCreate}
+              creatingUnder={
+                creating && creating.parentDir === item.node.path
+                  ? creating.type
+                  : null
+              }
+              onCommitCreate={handleCommitCreate}
+              onCancelCreate={handleCancelCreate}
             />
           ))}
+          {/* Inline creation at root level */}
+          {creating && creating.parentDir === "" && (
+            <InlineCreateInput
+              depth={0}
+              type={creating.type}
+              onCommit={handleCommitCreate}
+              onCancel={handleCancelCreate}
+            />
+          )}
         </div>
       </ScrollArea>
     </div>
   );
 });
+
+// ── InlineCreateInput ──
+
+function InlineCreateInput({
+  depth,
+  type,
+  onCommit,
+  onCancel,
+}: {
+  depth: number;
+  type: "file" | "folder";
+  onCommit: (name: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleBlur = useCallback(() => {
+    if (value.trim()) {
+      onCommit(value);
+    } else {
+      onCancel();
+    }
+  }, [value, onCommit, onCancel]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (value.trim()) {
+        onCommit(value);
+      } else {
+        onCancel();
+      }
+    }
+    if (e.key === "Escape") {
+      onCancel();
+    }
+  }, [value, onCommit, onCancel]);
+
+  return (
+    <div
+      className="flex min-h-7 items-center gap-2 pe-1.5 py-1"
+      style={{ paddingInlineStart: (depth + 1) * 14 + 8 }}
+    >
+      <span className="h-3.5 w-3.5 shrink-0" />
+      <span className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-sm bg-foreground/[0.06]">
+        {type === "folder"
+          ? <Folder className="h-3.25 w-3.25 text-amber-400/80" />
+          : <File className="h-3.25 w-3.25 text-muted-foreground/70" />
+        }
+      </span>
+      <input
+        ref={inputRef}
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={handleBlur}
+        onKeyDown={handleKeyDown}
+        placeholder={type === "folder" ? "folder name" : "filename"}
+        className="min-w-0 flex-1 rounded bg-foreground/[0.06] px-1.5 py-0.5 text-xs text-foreground outline-none ring-1 ring-foreground/10 focus:ring-foreground/20"
+      />
+    </div>
+  );
+}
 
 // ── FileTreeRow ──
 
@@ -222,6 +369,11 @@ interface FileTreeRowProps {
   cwd: string;
   onToggleDir: (path: string) => void;
   onFileClick: (node: FileTreeNode, event: React.MouseEvent<HTMLDivElement>) => void;
+  onRefresh: () => void;
+  onStartCreate: (parentDir: string, type: "file" | "folder") => void;
+  creatingUnder: "file" | "folder" | null;
+  onCommitCreate: (name: string) => void;
+  onCancelCreate: () => void;
 }
 
 const FileTreeRow = memo(function FileTreeRow({
@@ -231,11 +383,31 @@ const FileTreeRow = memo(function FileTreeRow({
   cwd,
   onToggleDir,
   onFileClick,
+  onRefresh,
+  onStartCreate,
+  creatingUnder,
+  onCommitCreate,
+  onCancelCreate,
 }: FileTreeRowProps) {
   const isDir = node.type === "directory";
+  const absolutePath = `${cwd}/${node.path}`;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameName, setRenameName] = useState(node.name);
+  // Track cursor position so the menu opens where the user right-clicked.
+  const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
+  const suppressClickUntilRef = useRef(0);
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  const suppressRowClick = useCallback((durationMs = 150) => {
+    suppressClickUntilRef.current = Date.now() + durationMs;
+  }, []);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
+      if (Date.now() < suppressClickUntilRef.current) {
+        return;
+      }
       if (isDir) {
         onToggleDir(node.path);
       } else {
@@ -245,41 +417,246 @@ const FileTreeRow = memo(function FileTreeRow({
     [isDir, node, onToggleDir, onFileClick],
   );
 
-  return (
-    <div
-      onClick={handleClick}
-      className="group flex min-h-7 cursor-pointer items-center gap-2 pe-1.5 py-1 transition-colors duration-75 hover:bg-foreground/[0.05]"
-      style={{ paddingInlineStart: depth * 14 + 8 }}
-    >
-      {/* Chevron for directories */}
-      {isDir ? (
-        <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
-          <ChevronRight
-            className={`h-3 w-3 text-muted-foreground/50 transition-transform duration-150 ${
-              isExpanded ? "rotate-90" : ""
-            }`}
-          />
-        </span>
-      ) : (
-        <span className="h-3.5 w-3.5 shrink-0" />
-      )}
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const rowRect = rowRef.current?.getBoundingClientRect();
+    setMenuPos({
+      x: rowRect ? e.clientX - rowRect.left : e.nativeEvent.offsetX,
+      y: rowRect ? e.clientY - rowRect.top : e.nativeEvent.offsetY,
+    });
+    setMenuOpen(true);
+  }, []);
 
-      {/* Icon */}
-      <span className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-sm bg-foreground/[0.03] transition-colors duration-150 group-hover:bg-foreground/[0.06]">
-        {isDir && isExpanded && <FolderOpen className="h-3.25 w-3.25 text-amber-400/80" />}
-        {isDir && !isExpanded && <Folder className="h-3.25 w-3.25 text-amber-400/80" />}
-        {!isDir && <File className={`h-3.25 w-3.25 ${getFileIconColor(node.extension)}`} />}
-      </span>
+  // ── Copy actions ──
 
-      {/* Name */}
-      <span className="min-w-0 flex-1 truncate text-xs text-foreground/80">{node.name}</span>
+  const handleCopyName = useCallback(() => {
+    void copyToClipboard(node.name);
+  }, [node.name]);
 
-      {/* Reserve the same trailing space for both row types so folders and files align. */}
-      <span className="ms-auto flex h-4.5 w-4.5 shrink-0 items-center justify-center">
-        {!isDir && (
-          <OpenInEditorButton filePath={`${cwd}/${node.path}`} />
+  const handleCopyPath = useCallback(() => {
+    void copyToClipboard(node.path);
+  }, [node.path]);
+
+  const handleCopyAbsolutePath = useCallback(() => {
+    void copyToClipboard(absolutePath);
+  }, [absolutePath]);
+
+  // ── Open / reveal ──
+
+  const handleRevealInFinder = useCallback(() => {
+    void window.claude.showItemInFolder(absolutePath);
+  }, [absolutePath]);
+
+  const handleOpenInEditor = useCallback(() => {
+    void window.claude.openInEditor(absolutePath);
+  }, [absolutePath]);
+
+  // ── Rename ──
+
+  const handleStartRename = useCallback(() => {
+    setRenameName(node.name);
+    setIsRenaming(true);
+  }, [node.name]);
+
+  const handleCommitRename = useCallback(async () => {
+    const trimmed = renameName.trim();
+    setIsRenaming(false);
+    if (!trimmed || trimmed === node.name) return;
+
+    const parentDir = dirname(absolutePath);
+    const newAbsPath = `${parentDir}/${trimmed}`;
+    const result = await window.claude.renameFile(absolutePath, newAbsPath);
+    if (result.ok) {
+      onRefresh();
+    }
+  }, [renameName, node.name, absolutePath, onRefresh]);
+
+  // ── Delete (trash) ──
+
+  const handleTrash = useCallback(async () => {
+    const result = await window.claude.trashItem(absolutePath);
+    if (result.ok) {
+      onRefresh();
+    }
+  }, [absolutePath, onRefresh]);
+
+  // ── New file/folder ──
+
+  const handleNewFile = useCallback(() => {
+    const parentDir = isDir ? node.path : dirname(node.path);
+    onStartCreate(parentDir, "file");
+  }, [isDir, node.path, onStartCreate]);
+
+  const handleNewFolder = useCallback(() => {
+    const parentDir = isDir ? node.path : dirname(node.path);
+    onStartCreate(parentDir, "folder");
+  }, [isDir, node.path, onStartCreate]);
+
+  // Invisible anchor positioned at cursor coordinates inside the row.
+  const anchorStyle: CSSProperties = {
+    position: "absolute",
+    left: menuPos.x,
+    top: menuPos.y,
+    width: 0,
+    height: 0,
+    pointerEvents: "none",
+  };
+
+  // ── Inline rename mode ──
+  if (isRenaming) {
+    return (
+      <div
+        className="flex min-h-7 items-center gap-2 pe-1.5 py-1 bg-foreground/[0.05]"
+        style={{ paddingInlineStart: depth * 14 + 8 }}
+      >
+        {isDir ? (
+          <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+            <ChevronRight className="h-3 w-3 text-muted-foreground/50" />
+          </span>
+        ) : (
+          <span className="h-3.5 w-3.5 shrink-0" />
         )}
-      </span>
-    </div>
+        <span className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-sm bg-foreground/[0.06]">
+          {isDir
+            ? <Folder className="h-3.25 w-3.25 text-amber-400/80" />
+            : <File className={`h-3.25 w-3.25 ${getFileIconColor(node.extension)}`} />
+          }
+        </span>
+        <input
+          autoFocus
+          value={renameName}
+          onChange={(e) => setRenameName(e.target.value)}
+          onBlur={() => void handleCommitRename()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void handleCommitRename();
+            }
+            if (e.key === "Escape") setIsRenaming(false);
+          }}
+          className="min-w-0 flex-1 rounded bg-foreground/[0.06] px-1.5 py-0.5 text-xs text-foreground outline-none ring-1 ring-foreground/10 focus:ring-foreground/20"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div
+        ref={rowRef}
+        onClick={handleClick}
+        onContextMenu={handleContextMenu}
+        className={`group relative flex min-h-7 cursor-pointer items-center gap-2 pe-1.5 py-1 transition-colors duration-75 hover:bg-foreground/[0.05] ${
+          menuOpen ? "bg-foreground/[0.05]" : ""
+        }`}
+        style={{ paddingInlineStart: depth * 14 + 8 }}
+      >
+        {/* Chevron for directories */}
+        {isDir ? (
+          <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+            <ChevronRight
+              className={`h-3 w-3 text-muted-foreground/50 transition-transform duration-150 ${
+                isExpanded ? "rotate-90" : ""
+              }`}
+            />
+          </span>
+        ) : (
+          <span className="h-3.5 w-3.5 shrink-0" />
+        )}
+
+        {/* Icon */}
+        <span className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-sm bg-foreground/[0.03] transition-colors duration-150 group-hover:bg-foreground/[0.06]">
+          {isDir && isExpanded && <FolderOpen className="h-3.25 w-3.25 text-amber-400/80" />}
+          {isDir && !isExpanded && <Folder className="h-3.25 w-3.25 text-amber-400/80" />}
+          {!isDir && <File className={`h-3.25 w-3.25 ${getFileIconColor(node.extension)}`} />}
+        </span>
+
+        {/* Name */}
+        <span className="min-w-0 flex-1 truncate text-xs text-foreground/80">{node.name}</span>
+
+        {/* Reserve the same trailing space for both row types so folders and files align. */}
+        <span className="ms-auto flex h-4.5 w-4.5 shrink-0 items-center justify-center">
+          {!isDir && (
+            <OpenInEditorButton filePath={absolutePath} />
+          )}
+        </span>
+
+        {/* Context menu — anchored to a 0×0 element at the cursor position */}
+        <DropdownMenu
+          open={menuOpen}
+          onOpenChange={(open) => {
+            if (!open) {
+              suppressRowClick();
+            }
+            setMenuOpen(open);
+          }}
+        >
+          <DropdownMenuTrigger asChild>
+            <span style={anchorStyle} />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" side="bottom" className="w-52">
+            {!isDir && (
+              <>
+                <DropdownMenuItem onClick={handleOpenInEditor}>
+                  <ExternalLink className="me-2 h-3.5 w-3.5" />
+                  Open in Editor
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleClick}>
+                  <Eye className="me-2 h-3.5 w-3.5" />
+                  Preview
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            )}
+            <DropdownMenuItem onClick={handleNewFile}>
+              <FilePlus className="me-2 h-3.5 w-3.5" />
+              New File
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleNewFolder}>
+              <FolderPlus className="me-2 h-3.5 w-3.5" />
+              New Folder
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={handleCopyName}>
+              <Type className="me-2 h-3.5 w-3.5" />
+              Copy Name
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleCopyPath}>
+              <Copy className="me-2 h-3.5 w-3.5" />
+              Copy Path
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleCopyAbsolutePath}>
+              <ClipboardCopy className="me-2 h-3.5 w-3.5" />
+              Copy Absolute Path
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={handleRevealInFinder}>
+              <FolderSearch className="me-2 h-3.5 w-3.5" />
+              {REVEAL_LABEL}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleStartRename}>
+              <Pencil className="me-2 h-3.5 w-3.5" />
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              onClick={() => void handleTrash()}
+            >
+              <Trash2 className="me-2 h-3.5 w-3.5" />
+              {TRASH_LABEL}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      {/* Inline creation input — rendered directly below this directory row when active */}
+      {creatingUnder && isDir && isExpanded && (
+        <InlineCreateInput
+          depth={depth + 1}
+          type={creatingUnder}
+          onCommit={onCommitCreate}
+          onCancel={onCancelCreate}
+        />
+      )}
+    </>
   );
 });

@@ -1,9 +1,12 @@
 import { useState, useMemo, useEffect, useRef } from "react";
+import { useInlineRename } from "@/hooks/useInlineRename";
+import { useContextMenuPosition } from "@/hooks/useContextMenuPosition";
 import {
   Pencil,
   Trash2,
   MoreHorizontal,
   FolderOpen,
+  FolderPlus,
   SquarePen,
   KanbanSquare,
   ChevronRight,
@@ -12,6 +15,7 @@ import {
   ArrowRightLeft,
   Smile,
   X,
+  GitBranch,
 } from "lucide-react";
 import { resolveLucideIcon } from "@/lib/icon-utils";
 import { Button } from "@/components/ui/button";
@@ -24,6 +28,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
+  DropdownMenuCheckboxItem,
 } from "@/components/ui/dropdown-menu";
 import {
   Popover,
@@ -31,65 +36,26 @@ import {
   PopoverContent,
 } from "@/components/ui/popover";
 import { IconPicker } from "@/components/IconPicker";
-import type { ChatSession, InstalledAgent, Project, Space } from "@/types";
+import type { ChatFolder, ChatSession, InstalledAgent, Project, Space } from "@/types";
 import { SessionItem } from "./SessionItem";
 import { CCSessionList } from "./CCSessionList";
-
-interface SessionGroup {
-  label: string;
-  sessions: ChatSession[];
-}
-
-/** Sort key: latest user-message timestamp, falling back to creation time. */
-function getSortTimestamp(session: ChatSession): number {
-  return session.lastMessageAt ?? session.createdAt;
-}
-
-function groupSessionsByDate(sessions: ChatSession[]): SessionGroup[] {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const todayMs = today.getTime();
-  const yesterdayMs = todayMs - 86_400_000;
-  const weekAgoMs = todayMs - 7 * 86_400_000;
-
-  const groups: SessionGroup[] = [
-    { label: "Today", sessions: [] },
-    { label: "Yesterday", sessions: [] },
-    { label: "Last 7 Days", sessions: [] },
-    { label: "Older", sessions: [] },
-  ];
-
-  // Sort by most recent user activity first
-  const sorted = [...sessions].sort((a, b) => getSortTimestamp(b) - getSortTimestamp(a));
-
-  for (const session of sorted) {
-    const ts = getSortTimestamp(session);
-    if (ts >= todayMs) {
-      groups[0].sessions.push(session);
-    } else if (ts >= yesterdayMs) {
-      groups[1].sessions.push(session);
-    } else if (ts >= weekAgoMs) {
-      groups[2].sessions.push(session);
-    } else {
-      groups[3].sessions.push(session);
-    }
-  }
-
-  return groups.filter((g) => g.sessions.length > 0);
-}
+import { PinnedSection } from "./PinnedSection";
+import { FolderSection } from "./FolderSection";
+import { BranchSection } from "./BranchSection";
+import { useSidebarActions } from "./SidebarActionsContext";
+import { buildSidebarGroups, type SidebarItem, type PinnedSidebarItem } from "@/lib/sidebar/grouping";
 
 export function ProjectSection({
   islandLayout,
   project,
   sessions,
+  folders,
   activeSessionId,
   jiraBoardEnabled,
   isJiraBoardOpen,
+  organizeByChatBranch,
   onNewChat,
   onToggleJiraBoard,
-  onSelectSession,
-  onDeleteSession,
-  onRenameSession,
   onDeleteProject,
   onRenameProject,
   onUpdateIcon,
@@ -98,19 +64,20 @@ export function ProjectSection({
   onMoveToSpace,
   onReorderProject,
   defaultChatLimit,
+  onCreateFolder,
+  onSetOrganizeByChatBranch,
   agents,
 }: {
   islandLayout: boolean;
   project: Project;
   sessions: ChatSession[];
+  folders: ChatFolder[];
   activeSessionId: string | null;
   jiraBoardEnabled: boolean;
   isJiraBoardOpen: boolean;
+  organizeByChatBranch: boolean;
   onNewChat: () => void;
   onToggleJiraBoard: () => void;
-  onSelectSession: (id: string) => void;
-  onDeleteSession: (id: string) => void;
-  onRenameSession: (id: string, title: string) => void;
   onDeleteProject: () => void;
   onRenameProject: (name: string) => void;
   onUpdateIcon: (icon: string | null, iconType: "emoji" | "lucide" | null) => void;
@@ -119,16 +86,36 @@ export function ProjectSection({
   onMoveToSpace: (spaceId: string) => void;
   onReorderProject: (targetProjectId: string) => void;
   defaultChatLimit: number;
+  onCreateFolder: () => void;
+  onSetOrganizeByChatBranch: (on: boolean) => void;
   agents?: InstalledAgent[];
 }) {
+  const {
+    selectSession,
+    deleteSession,
+    renameSession,
+    pinSession,
+    moveSessionToFolder,
+    pinFolder,
+    renameFolder,
+    deleteFolder,
+    openInSplitView,
+    canOpenSessionInSplitView,
+  } = useSidebarActions();
+  const { isEditing, startEditing, inputProps: renameInputProps } = useInlineRename({
+    initialName: project.name,
+    onRename: onRenameProject,
+  });
+  const {
+    menuOpen, menuAlign, setMenuOpen,
+    handleContextMenu, handleMenuButtonClick,
+    triggerStyle, containerRef,
+  } = useContextMenuPosition();
   const [expanded, setExpanded] = useState(true);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState(project.name);
   const [isDragOver, setIsDragOver] = useState(false);
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
   const openingIconPickerRef = useRef(false);
-  // Pagination: show N chats initially, load 20 more on each click
+  // Pagination: show N items initially, load 20 more on each click
   const [visibleCount, setVisibleCount] = useState(defaultChatLimit);
 
   // Reset visible count when the configured limit changes
@@ -136,49 +123,109 @@ export function ProjectSection({
     setVisibleCount(defaultChatLimit);
   }, [defaultChatLimit]);
 
-  // Sort all sessions by latest message, then slice for pagination
-  const sortedSessions = useMemo(
-    () => [...sessions].sort((a, b) => getSortTimestamp(b) - getSortTimestamp(a)),
-    [sessions],
+  // Build grouped sidebar items using the grouping algorithm
+  const sidebarItems = useMemo(
+    () => buildSidebarGroups(sessions, folders, organizeByChatBranch),
+    [sessions, folders, organizeByChatBranch],
   );
-  const visibleSessions = useMemo(
-    () => sortedSessions.slice(0, visibleCount),
-    [sortedSessions, visibleCount],
-  );
-  const hasMore = sortedSessions.length > visibleCount;
-  const remainingCount = sortedSessions.length - visibleCount;
 
-  const groups = useMemo(() => groupSessionsByDate(visibleSessions), [visibleSessions]);
+  // Count non-pinned items for pagination
+  const pinnedItem = sidebarItems.find((item): item is PinnedSidebarItem => item.type === "pinned");
+  const contentItems = sidebarItems.filter((item) => item.type !== "pinned");
 
-  const handleRename = () => {
-    const trimmed = editName.trim();
-    if (trimmed && trimmed !== project.name) {
-      onRenameProject(trimmed);
+  // For pagination, count total visible sessions (not groups)
+  const totalSessionCount = sessions.filter((s) => !s.pinned).length;
+  const hasMore = totalSessionCount > visibleCount;
+  const remainingCount = totalSessionCount - visibleCount;
+
+  // Limit content items to visibleCount sessions
+  const visibleContentItems = useMemo(() => {
+    let sessionsSoFar = 0;
+    const visible: SidebarItem[] = [];
+    for (const item of contentItems) {
+      if (sessionsSoFar >= visibleCount) break;
+      visible.push(item);
+      if (item.type === "session") {
+        sessionsSoFar += 1;
+      } else {
+        sessionsSoFar += item.sessions.length;
+      }
     }
-    setIsEditing(false);
-  };
+    return visible;
+  }, [contentItems, visibleCount]);
 
   if (isEditing) {
     return (
       <div className="mb-1 flex items-center gap-1 px-1 ps-2">
         <input
-          autoFocus
-          value={editName}
-          onChange={(e) => setEditName(e.target.value)}
-          onBlur={handleRename}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") handleRename();
-            if (e.key === "Escape") setIsEditing(false);
-          }}
+          {...renameInputProps}
           className="flex-1 rounded-lg bg-black/5 px-2 py-1 text-[13px] text-sidebar-foreground outline-none ring-1 ring-sidebar-ring dark:bg-white/5"
         />
       </div>
     );
   }
 
+  /** Render a single sidebar item (folder, branch, or session). */
+  function renderItem(item: SidebarItem) {
+    if (item.type === "folder") {
+      const { folder } = item;
+      return (
+        <FolderSection
+          key={`folder-${folder.id}`}
+          folder={folder}
+          sessions={item.sessions}
+          activeSessionId={activeSessionId}
+          islandLayout={islandLayout}
+          allFolders={folders}
+          onPinFolder={(pinned) => pinFolder(project.id, folder.id, pinned)}
+          onRenameFolder={(name) => renameFolder(project.id, folder.id, name)}
+          onDeleteFolder={() => deleteFolder(project.id, folder.id)}
+          agents={agents}
+        />
+      );
+    }
+
+    if (item.type === "branch") {
+      return (
+        <BranchSection
+          key={`branch-${item.branchName}`}
+          branchName={item.branchName}
+          children={item.children}
+          activeSessionId={activeSessionId}
+          islandLayout={islandLayout}
+          allFolders={folders}
+          agents={agents}
+        />
+      );
+    }
+
+    if (item.type === "session") {
+      const { session } = item;
+      return (
+        <SessionItem
+          key={session.id}
+          islandLayout={islandLayout}
+          session={session}
+          isActive={session.id === activeSessionId}
+          onSelect={() => selectSession(session.id)}
+          onDelete={() => deleteSession(session.id)}
+          onRename={(title) => renameSession(session.id, title)}
+          onPinToggle={() => pinSession(session.id, !session.pinned)}
+          folders={folders}
+          onMoveToFolder={(folderId) => moveSessionToFolder(session.id, folderId)}
+          agents={agents}
+          onOpenInSplitView={openInSplitView ? () => openInSplitView(session.id) : undefined}
+          canOpenInSplitView={canOpenSessionInSplitView?.(session.id) ?? true}
+        />
+      );
+    }
+
+    return null;
+  }
+
   return (
     <div
-      className={`mb-2 rounded-xl transition-all ${isDragOver ? "bg-black/5 dark:bg-white/5 ring-1 ring-primary/20" : ""}`}
+      className={`mb-2 rounded-xl transition-all ${isDragOver ? "bg-black/5 ring-1 ring-primary/20 dark:bg-white/5" : ""}`}
       onDragOver={(e) => {
         // Accept project drops for reorder
         if (e.dataTransfer.types.includes("application/x-project-id")) {
@@ -198,16 +245,18 @@ export function ProjectSection({
     >
       {/* Project header row */}
       <div
-        className="group flex items-center"
+        ref={containerRef}
+        className="group relative flex items-center"
         draggable
         onDragStart={(e) => {
           e.dataTransfer.setData("application/x-project-id", project.id);
           e.dataTransfer.effectAllowed = "move";
         }}
+        onContextMenu={handleContextMenu}
       >
         <button
           onClick={() => setExpanded(!expanded)}
-          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2.5 py-2 text-start text-[13px] font-semibold text-sidebar-foreground/90 transition-all hover:bg-black/5 dark:hover:bg-white/10"
+          className="flex w-full min-w-0 items-center gap-1.5 rounded-lg px-2.5 group-hover:pe-20 py-2 text-start text-[13px] font-semibold text-sidebar-foreground/90 transition-all hover:bg-black/5 dark:hover:bg-white/10"
         >
           <ChevronRight
             className={`h-4 w-4 shrink-0 text-sidebar-foreground/50 transition-transform ${
@@ -215,11 +264,15 @@ export function ProjectSection({
             }`}
           />
           {project.icon && project.iconType === "emoji" ? (
-            <span className="h-4 w-4 shrink-0 text-sm leading-4 text-center">{project.icon}</span>
+            <span className="h-4 w-4 shrink-0 text-center text-sm leading-4">{project.icon}</span>
           ) : project.icon && project.iconType === "lucide" ? (
             (() => {
               const Icon = resolveLucideIcon(project.icon);
-              return Icon ? <Icon className="h-4 w-4 shrink-0 text-sidebar-foreground/60" /> : <FolderOpen className="h-4 w-4 shrink-0 text-sidebar-foreground/60" />;
+              return Icon ? (
+                <Icon className="h-4 w-4 shrink-0 text-sidebar-foreground/60" />
+              ) : (
+                <FolderOpen className="h-4 w-4 shrink-0 text-sidebar-foreground/60" />
+              );
             })()
           ) : (
             <FolderOpen className="h-4 w-4 shrink-0 text-sidebar-foreground/60" />
@@ -227,58 +280,86 @@ export function ProjectSection({
           <span className="min-w-0 truncate">{project.name}</span>
         </button>
 
-        {jiraBoardEnabled && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className={`h-7 w-7 rounded-lg shrink-0 transition-all ${
-              isJiraBoardOpen
-                ? "bg-black/10 text-sidebar-foreground dark:bg-white/15"
-                : "text-sidebar-foreground/50 hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
-            }`}
-            onClick={onToggleJiraBoard}
-            title="Open Jira board"
-          >
-            <KanbanSquare className="h-4 w-4" />
-          </Button>
-        )}
-
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 rounded-lg shrink-0 text-sidebar-foreground/50 transition-all hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
-          onClick={onNewChat}
-        >
-          <SquarePen className="h-4 w-4" />
-        </Button>
-
-        <Popover open={iconPickerOpen} onOpenChange={setIconPickerOpen}>
-        <PopoverAnchor>
-        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-          <DropdownMenuTrigger asChild>
+        <div className="absolute end-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+          {jiraBoardEnabled && (
             <Button
               variant="ghost"
               size="icon"
-              className="h-7 w-7 rounded-lg shrink-0 text-sidebar-foreground/50 transition-all hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
+              className={`h-7 w-7 shrink-0 rounded-lg transition-all ${
+                isJiraBoardOpen
+                  ? "bg-black/10 text-sidebar-foreground dark:bg-white/15"
+                  : "text-sidebar-foreground/50 hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
+              }`}
+              onClick={onToggleJiraBoard}
+              title="Open Jira board"
             >
-              <MoreHorizontal className="h-4 w-4" />
+              <KanbanSquare className="h-4 w-4" />
             </Button>
+          )}
+
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0 rounded-lg text-sidebar-foreground/50 transition-all hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
+            onClick={onNewChat}
+          >
+            <SquarePen className="h-4 w-4" />
+          </Button>
+
+          <Popover open={iconPickerOpen} onOpenChange={setIconPickerOpen}>
+            <PopoverAnchor asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0 rounded-lg text-sidebar-foreground/50 transition-all hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
+                onClick={handleMenuButtonClick}
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </PopoverAnchor>
+
+          {/* Icon picker popover — anchored to the ... button, triggered from dropdown "Set icon" */}
+          <PopoverContent align="start" side="right" className="w-72 p-3">
+            <IconPicker
+              value={project.icon ?? ""}
+              iconType={project.iconType ?? "emoji"}
+              onChange={(icon, type) => {
+                onUpdateIcon(icon, type);
+                setIconPickerOpen(false);
+              }}
+            />
+          </PopoverContent>
+        </Popover>
+        </div>
+
+        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+          <DropdownMenuTrigger asChild>
+            <span style={triggerStyle} />
           </DropdownMenuTrigger>
           <DropdownMenuContent
-            align="end"
-            className="w-44"
+            align={menuAlign}
+            side="bottom"
+            sideOffset={6}
+            className="w-48"
             onCloseAutoFocus={(e) => {
               if (!openingIconPickerRef.current) return;
               e.preventDefault();
               openingIconPickerRef.current = false;
             }}
           >
-            <DropdownMenuItem
-              onClick={() => {
-                setEditName(project.name);
-                setIsEditing(true);
-              }}
+            <DropdownMenuItem onClick={onCreateFolder}>
+              <FolderPlus className="me-2 h-3.5 w-3.5" />
+              New folder
+            </DropdownMenuItem>
+            <DropdownMenuCheckboxItem
+              checked={organizeByChatBranch}
+              onCheckedChange={onSetOrganizeByChatBranch}
             >
+              <GitBranch className="me-2 h-3.5 w-3.5" />
+              Organize by branch
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={startEditing}>
               <Pencil className="me-2 h-3.5 w-3.5" />
               Rename
             </DropdownMenuItem>
@@ -305,11 +386,8 @@ export function ProjectSection({
                 <History className="me-2 h-3.5 w-3.5" />
                 Resume CC Chat
               </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-72 max-h-80 overflow-y-auto">
-                <CCSessionList
-                  projectPath={project.path}
-                  onSelect={onImportCCSession}
-                />
+              <DropdownMenuSubContent className="max-h-80 w-72 overflow-y-auto">
+                <CCSessionList projectPath={project.path} onSelect={onImportCCSession} />
               </DropdownMenuSubContent>
             </DropdownMenuSub>
             {otherSpaces.length > 0 && (
@@ -322,10 +400,7 @@ export function ProjectSection({
                   {otherSpaces.map((s) => {
                     const SpIcon = s.iconType === "lucide" ? resolveLucideIcon(s.icon) : null;
                     return (
-                      <DropdownMenuItem
-                        key={s.id}
-                        onClick={() => onMoveToSpace(s.id)}
-                      >
+                      <DropdownMenuItem key={s.id} onClick={() => onMoveToSpace(s.id)}>
                         {s.iconType === "emoji" ? (
                           <span className="me-2 text-sm">{s.icon}</span>
                         ) : SpIcon ? (
@@ -348,68 +423,47 @@ export function ProjectSection({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        </PopoverAnchor>
-
-        {/* Icon picker popover — anchored to the ⋯ button, triggered from dropdown "Set icon" */}
-        <PopoverContent align="start" side="right" className="w-72 p-3">
-          <IconPicker
-            value={project.icon ?? ""}
-            iconType={project.iconType ?? "emoji"}
-            onChange={(icon, type) => {
-              onUpdateIcon(icon, type);
-              setIconPickerOpen(false);
-            }}
-          />
-        </PopoverContent>
-        </Popover>
       </div>
 
       {/* Nested chats */}
       {expanded && (
         <div className="ms-2 overflow-hidden">
-          {groups.map((group, i) => (
-            <div key={group.label} className={i < groups.length - 1 ? "mb-3" : ""}>
-              <div className="mb-1.5 px-3">
-                <p className="mb-1 text-[10px] font-bold text-sidebar-foreground/40 uppercase tracking-wider">
-                  {group.label}
-                </p>
-              </div>
-                {group.sessions.map((session) => (
-                  <SessionItem
-                    key={session.id}
-                    islandLayout={islandLayout}
-                    session={session}
-                    isActive={session.id === activeSessionId}
-                    onSelect={() => onSelectSession(session.id)}
-                    onDelete={() => onDeleteSession(session.id)}
-                    onRename={(title) => onRenameSession(session.id, title)}
-                    agents={agents}
-                  />
-                ))}
-              </div>
-            ))}
+          {/* Pinned section */}
+          {pinnedItem && (
+            <PinnedSection
+              sessions={pinnedItem.sessions}
+              pinnedFolders={pinnedItem.children}
+              activeSessionId={activeSessionId}
+              islandLayout={islandLayout}
+              folders={folders}
+              agents={agents}
+            />
+          )}
 
-            {/* Load more button */}
-            {hasMore && (
-              <button
-                onClick={() => setVisibleCount((prev) => prev + 20)}
-                className="group/more mt-1 flex w-full items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11.5px] font-medium text-sidebar-foreground/50 transition-all hover:bg-black/5 hover:text-sidebar-foreground/70 dark:hover:bg-white/5"
-              >
-                <ChevronDown className="h-3 w-3 shrink-0 transition-transform group-hover/more:translate-y-0.5" />
-                <span>
-                  Show more
-                  <span className="ms-1 text-sidebar-foreground/35">
-                    ({Math.min(20, remainingCount)} of {remainingCount})
-                  </span>
+          {/* Content items (folders, branches, ungrouped sessions) */}
+          {visibleContentItems.map((item) => renderItem(item))}
+
+          {/* Load more button */}
+          {hasMore && (
+            <button
+              onClick={() => setVisibleCount((prev) => prev + 20)}
+              className="group/more mt-1 flex w-full items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11.5px] font-medium text-sidebar-foreground/50 transition-all hover:bg-black/5 hover:text-sidebar-foreground/70 dark:hover:bg-white/5"
+            >
+              <ChevronDown className="h-3 w-3 shrink-0 transition-transform group-hover/more:translate-y-0.5" />
+              <span>
+                Show more
+                <span className="ms-1 text-sidebar-foreground/35">
+                  ({Math.min(20, remainingCount)} of {remainingCount})
                 </span>
-              </button>
-            )}
+              </span>
+            </button>
+          )}
 
-            {sessions.length === 0 && (
-              <p className="px-3 py-2 text-[13px] text-sidebar-foreground/40 font-medium">
-                No conversations yet
-              </p>
-            )}
+          {sessions.length === 0 && (
+            <p className="px-3 py-2 text-[13px] font-medium text-sidebar-foreground/40">
+              No conversations yet
+            </p>
+          )}
         </div>
       )}
     </div>

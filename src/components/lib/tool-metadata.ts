@@ -122,3 +122,26 @@ export function getToolLabel(toolName: string, type: ToolLabelType): string | nu
 
   return type === "failure" ? `run ${toolName.toLowerCase()}` : null;
 }
+
+// ── Tool colors ──
+
+export const TOOL_COLORS: Record<string, string> = {
+  Bash: "text-[#6ee7b7]",
+  Read: "text-[#67e8f9]",
+  Write: "text-[#fb923c]",
+  Edit: "text-[#fb923c]",
+  NotebookEdit: "text-[#fb923c]",
+  Grep: "text-[#a78bfa]",
+  Glob: "text-[#a78bfa]",
+  WebSearch: "text-[#22d3ee]",
+  WebFetch: "text-[#22d3ee]",
+  Task: "text-[#38bdf8]",
+  Think: "text-[#fde68a]",
+  TodoWrite: "text-[#34d399]",
+  Skill: "text-[#f0abfc]",
+  ToolSearch: "text-[#818cf8]",
+};
+
+export function getToolColor(toolName: string): string {
+  return TOOL_COLORS[toolName] ?? "text-foreground/40";
+}

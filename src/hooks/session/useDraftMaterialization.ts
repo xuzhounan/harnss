@@ -3,7 +3,8 @@ import { toast } from "sonner";
 import type { UIMessage, ChatSession, McpServerConfig, Project, ImageAttachment, EngineId } from "../../types";
 import { toMcpStatusState } from "../../lib/mcp-utils";
 import { suppressNextSessionCompletion } from "../../lib/notification-utils";
-import { captureException } from "../../lib/analytics";
+import { captureException } from "../../lib/analytics/analytics";
+import { createSystemMessage, createUserMessage } from "../../lib/message-factory";
 import {
   DRAFT_ID,
   getEffectiveClaudePermissionMode,
@@ -64,6 +65,7 @@ export function useDraftMaterialization({
     draftAcpSessionIdRef,
     draftMcpStatusesRef,
     materializingRef,
+    pendingAcpDraftPromptRef,
     acpAgentIdRef,
     acpAgentSessionIdRef,
     codexRawModelsRef,
@@ -150,13 +152,13 @@ export function useDraftMaterialization({
       return;
     }
 
-    if (result.cancelled) {
+    if ("cancelled" in result && result.cancelled) {
       setAcpConfigOptionsLoading(false);
       return;
     }
 
-    if (result.error || !result.sessionId) {
-      const message = result.error || "Failed to initialize ACP agent";
+    if (!("sessionId" in result) || !result.sessionId) {
+      const message = ("error" in result && result.error) ? result.error : "Failed to initialize ACP agent";
       console.warn("[eagerStartAcpSession] start() returned error:", message);
       toast.error("Failed to initialize ACP agent", { description: message });
       setAcpConfigOptionsLoading(false);
@@ -177,12 +179,20 @@ export function useDraftMaterialization({
       return;
     }
 
-    liveSessionIdsRef.current.add(sessionId);
     draftAcpSessionIdRef.current = sessionId;
     setDraftAcpSessionId(sessionId);
+    if ("authRequired" in result && result.authRequired) {
+      acpAgentIdRef.current = agentId;
+      acpAgentSessionIdRef.current = null;
+      acp.setAuthMethods(result.authMethods ?? []);
+      acp.setAuthRequired(true);
+      setAcpConfigOptionsLoading(false);
+      return;
+    }
     acpAgentIdRef.current = agentId;
-    acpAgentSessionIdRef.current = result.agentSessionId ?? null;
-    let resolvedConfigOptions = result.configOptions ?? [];
+    acpAgentSessionIdRef.current = ("agentSessionId" in result && result.agentSessionId) ? result.agentSessionId : null;
+    liveSessionIdsRef.current.add(sessionId);
+    let resolvedConfigOptions = ("configOptions" in result && result.configOptions) ? result.configOptions : [];
     try {
       const bufferedConfig = await window.claude.acp.getConfigOptions(sessionId);
       if ((bufferedConfig.configOptions?.length ?? 0) > 0) {
@@ -206,8 +216,8 @@ export function useDraftMaterialization({
       // Best-effort fetch only — command updates will still stream through once mounted.
     }
 
-    if (result.mcpStatuses?.length) {
-      setDraftMcpStatuses(result.mcpStatuses.map((status) => ({
+    if ("mcpStatuses" in result && result.mcpStatuses?.length) {
+      setDraftMcpStatuses(result.mcpStatuses.map((status: { name: string; status: string }) => ({
         name: status.name,
         status: toMcpStatusState(status.status),
       })));
@@ -310,6 +320,8 @@ export function useDraftMaterialization({
     backgroundStoreRef.current.delete(id);
     draftAcpSessionIdRef.current = null;
     setDraftAcpSessionId(null);
+    pendingAcpDraftPromptRef.current = null;
+    acp.clearAuthRequired();
     setAcpConfigOptionsLoading(false);
     setInitialConfigOptions([]);
     setInitialSlashCommands([]);
@@ -349,13 +361,15 @@ export function useDraftMaterialization({
           createdAt: Date.now(),
           lastMessageAt: Date.now(),
           totalCost: 0,
+          effort: options.effort,
+          permissionMode: options.permissionMode,
           planMode: !!options.planMode,
           isActive: true,
           engine: "acp" as const,
           agentId: options.agentId,
         }, ...prev.map(s => ({ ...s, isActive: false }))]);
         const eagerSessionId = draftAcpSessionIdRef.current;
-        if (eagerSessionId && liveSessionIdsRef.current.has(eagerSessionId)) {
+        if (eagerSessionId && liveSessionIdsRef.current.has(eagerSessionId) && !acp.authRequired) {
           sessionId = eagerSessionId;
           draftAcpSessionIdRef.current = null;
           setDraftAcpSessionId(null);
@@ -366,31 +380,17 @@ export function useDraftMaterialization({
             cwd: getProjectCwd(project),
             mcpServers,
           });
-          if (result.cancelled) {
+          if ("cancelled" in result && result.cancelled) {
             setSessions(prev => prev.filter(s => s.id !== DRAFT_ID));
             materializingRef.current = false;
             return "";
           }
-          if (result.error || !result.sessionId) {
-            const errorMsg = result.error || "Failed to start agent session";
+          if (!("sessionId" in result) || !result.sessionId) {
+            const errorMsg = ("error" in result && result.error) ? result.error : "Failed to start agent session";
             const failedId = `failed-acp-${Date.now()}`;
-            const now = Date.now();
             const errorMessages: UIMessage[] = [
-              {
-                id: `user-${now}`,
-                role: "user" as const,
-                content: text,
-                timestamp: now,
-                ...(images?.length ? { images } : {}),
-                ...(displayText ? { displayContent: displayText } : {}),
-              },
-              {
-                id: `system-error-${now}`,
-                role: "system" as const,
-                content: errorMsg,
-                isError: true,
-                timestamp: now,
-              },
+              createUserMessage(text, images, displayText),
+              createSystemMessage(errorMsg, true),
             ];
 
             setSessions(prev => prev.map(s =>
@@ -413,6 +413,8 @@ export function useDraftMaterialization({
               title: "New Chat",
               createdAt: Date.now(),
               messages: errorMessages,
+              effort: options.effort,
+              permissionMode: options.permissionMode,
               planMode: !!options.planMode,
               totalCost: 0,
               engine: "acp",
@@ -422,10 +424,29 @@ export function useDraftMaterialization({
             materializingRef.current = false;
             return "";
           }
+          if ("authRequired" in result && result.authRequired) {
+            acpAgentIdRef.current = options.agentId;
+            acpAgentSessionIdRef.current = null;
+            draftAcpSessionIdRef.current = result.sessionId;
+            setDraftAcpSessionId(result.sessionId);
+            setInitialMessages([createUserMessage(text, images, displayText)]);
+            setInitialMeta({
+              isProcessing: false,
+              isConnected: false,
+              sessionInfo: null,
+              totalCost: 0,
+              contextUsage: null,
+            });
+            acp.setAuthMethods(result.authMethods ?? []);
+            acp.setAuthRequired(true);
+            setAcpConfigOptionsLoading(false);
+            materializingRef.current = false;
+            return "";
+          }
           sessionId = result.sessionId;
           acpAgentIdRef.current = options.agentId;
-          acpAgentSessionIdRef.current = result.agentSessionId ?? null;
-          if (result.configOptions?.length) {
+          acpAgentSessionIdRef.current = ("agentSessionId" in result && result.agentSessionId) ? result.agentSessionId : null;
+          if ("configOptions" in result && result.configOptions?.length) {
             setInitialConfigOptions(result.configOptions);
           }
         }
@@ -443,6 +464,8 @@ export function useDraftMaterialization({
           createdAt: Date.now(),
           lastMessageAt: Date.now(),
           totalCost: 0,
+          effort: options.effort,
+          permissionMode: options.permissionMode,
           planMode: !!options.planMode,
           isActive: true,
           engine: "codex" as const,
@@ -462,10 +485,9 @@ export function useDraftMaterialization({
         if (result.error || !result.sessionId) {
           const errorMsg = result.error || "Failed to start Codex session";
           const failedId = `failed-codex-${Date.now()}`;
-          const now = Date.now();
           const errorMessages: UIMessage[] = [
-            { id: `user-${now}`, role: "user" as const, content: text, timestamp: now, ...(images?.length ? { images } : {}), ...(displayText ? { displayContent: displayText } : {}) },
-            { id: `system-error-${now}`, role: "system" as const, content: errorMsg, isError: true, timestamp: now },
+            createUserMessage(text, images, displayText),
+            createSystemMessage(errorMsg, true),
           ];
           setSessions(prev => prev.map(s => s.id === DRAFT_ID ? { ...s, id: failedId, titleGenerating: false } : s));
           setInitialMessages(errorMessages);
@@ -478,7 +500,18 @@ export function useDraftMaterialization({
           });
           setActiveSessionId(failedId);
           setDraftProjectId(null);
-          window.claude.sessions.save({ id: failedId, projectId: project.id, title: "New Chat", createdAt: Date.now(), messages: errorMessages, planMode: !!options.planMode, totalCost: 0, engine: "codex" });
+          window.claude.sessions.save({
+            id: failedId,
+            projectId: project.id,
+            title: "New Chat",
+            createdAt: Date.now(),
+            messages: errorMessages,
+            effort: options.effort,
+            permissionMode: options.permissionMode,
+            planMode: !!options.planMode,
+            totalCost: 0,
+            engine: "codex",
+          });
           materializingRef.current = false;
           return "";
         }
@@ -566,6 +599,7 @@ export function useDraftMaterialization({
       liveSessionIdsRef.current.add(sessionId);
 
       const now = Date.now();
+      const currentBranch = refs.currentBranchRef.current;
       const newSession: ChatSession = {
         id: sessionId,
         projectId: project.id,
@@ -573,10 +607,13 @@ export function useDraftMaterialization({
         createdAt: now,
         lastMessageAt: now,
         model: sessionModel,
+        effort: options.effort,
+        permissionMode: options.permissionMode,
         planMode: !!options.planMode,
         totalCost: 0,
         isActive: true,
         titleGenerating: true,
+        ...(currentBranch ? { branch: currentBranch } : {}),
         engine: draftEngine,
         ...(draftEngine === "acp" && options.agentId ? {
           agentId: options.agentId,
@@ -597,15 +634,7 @@ export function useDraftMaterialization({
           // Preserve the user message + processing state through useACP's reset effect
           // (which fires when sessionId changes from null → new ID).
           // React 19 batches these setState calls with setActiveSessionId below.
-          const userMsg: UIMessage = {
-            id: `user-${Date.now()}`,
-            role: "user" as const,
-            content: text,
-            timestamp: Date.now(),
-            ...(images?.length ? { images } : {}),
-            ...(displayText ? { displayContent: displayText } : {}),
-          };
-          setInitialMessages([userMsg]);
+          setInitialMessages([createUserMessage(text, images, displayText)]);
           setInitialMeta({
             isProcessing: true,
             isConnected: true,
@@ -622,6 +651,7 @@ export function useDraftMaterialization({
       }
       setActiveSessionId(sessionId);
       if (draftEngine === "acp") {
+        acp.clearAuthRequired();
         setDraftAcpSessionId(null);
       }
       setDraftProjectId(null);
@@ -635,7 +665,7 @@ export function useDraftMaterialization({
       materializingRef.current = false;
       return sessionId;
     },
-    [applyCodexModelDefaultEffort, findProject, generateSessionTitle, codex.setCodexModels, setDraftAcpSessionId],
+    [acp, applyCodexModelDefaultEffort, findProject, generateSessionTitle, codex.setCodexModels, setDraftAcpSessionId],
   );
 
   return {
