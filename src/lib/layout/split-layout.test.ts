@@ -79,4 +79,18 @@ describe("split layout utilities", () => {
       isWindows: false,
     })).toBe(1674);
   });
+
+  it("uses the live tools column width when it is wider than the minimum", () => {
+    expect(getAppMinimumWidth({
+      sidebarOpen: true,
+      isIslandLayout: true,
+      hasActiveSession: true,
+      hasRightPanel: false,
+      hasToolsColumn: true,
+      toolsColumnWidth: 560,
+      isSplitViewEnabled: false,
+      splitPaneCount: 1,
+      isWindows: false,
+    })).toBe(1608);
+  });
 });

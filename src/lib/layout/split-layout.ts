@@ -34,6 +34,7 @@ export interface AppMinimumWidthInput {
   hasActiveSession: boolean;
   hasRightPanel: boolean;
   hasToolsColumn: boolean;
+  toolsColumnWidth?: number;
   isSplitViewEnabled: boolean;
   splitPaneCount: number;
   splitTopRowItemKinds?: TopRowLayoutItemKind[];
@@ -90,6 +91,7 @@ export function getAppMinimumWidth({
   hasActiveSession,
   hasRightPanel,
   hasToolsColumn,
+  toolsColumnWidth,
   isSplitViewEnabled,
   splitPaneCount,
   splitTopRowItemKinds,
@@ -122,7 +124,7 @@ export function getAppMinimumWidth({
     minimumWidth += MIN_RIGHT_PANEL_WIDTH + getResizeHandleWidth(isIslandLayout);
   }
   if (hasToolsColumn) {
-    minimumWidth += MIN_TOOLS_PANEL_WIDTH + getResizeHandleWidth(isIslandLayout);
+    minimumWidth += Math.max(MIN_TOOLS_PANEL_WIDTH, toolsColumnWidth ?? 0) + getResizeHandleWidth(isIslandLayout);
   }
   return minimumWidth;
 }

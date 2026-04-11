@@ -69,7 +69,7 @@ import {
   MIN_TOOLS_PANEL_WIDTH,
   SPLIT_HANDLE_WIDTH,
 } from "@/lib/layout/constants";
-import { getMaxVisibleSplitPaneCount } from "@/lib/layout/split-layout";
+import { getAppMinimumWidth, getMaxVisibleSplitPaneCount } from "@/lib/layout/split-layout";
 import {
   buildConstrainedFractionsFromMinimums,
   canFitTopRowLayout,
@@ -774,6 +774,35 @@ export function AppLayout() {
     mainToolAreaRef,
     effectiveMainToolAreaFraction,
   );
+
+  useEffect(() => {
+    const minWidth = getAppMinimumWidth({
+      sidebarOpen: sidebar.isOpen,
+      isIslandLayout: settings.islandLayout,
+      hasActiveSession: !!manager.activeSessionId,
+      hasRightPanel,
+      hasToolsColumn: mainTopToolColumnCount > 0,
+      toolsColumnWidth: mainTopToolColumnCount > 0
+        ? Math.max(mainToolAreaWidth, mainToolWorkspace.preferredTopAreaWidthPx ?? 0)
+        : undefined,
+      isSplitViewEnabled: splitView.enabled && splitView.paneCount > 1,
+      splitPaneCount: splitView.paneCount,
+      splitTopRowItemKinds: splitView.topRowItems.map((item) => item.kind),
+      isWindows,
+    });
+    window.claude.setMinWidth(Math.max(minWidth, 600));
+  }, [
+    hasRightPanel,
+    mainToolAreaWidth,
+    mainToolWorkspace.preferredTopAreaWidthPx,
+    mainTopToolColumnCount,
+    manager.activeSessionId,
+    settings.islandLayout,
+    sidebar.isOpen,
+    splitView.enabled,
+    splitView.paneCount,
+    splitView.topRowItems,
+  ]);
 
   // ── Main workspace resize (extracted to hook) ──
   const mainToolAreaResize = useMainToolAreaResize({
