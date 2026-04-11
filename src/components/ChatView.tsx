@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useMemo, useCallback, useState, startTransition, memo, type PointerEvent as ReactPointerEvent } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useMemo, useCallback, useState, startTransition, memo, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { motion } from "motion/react";
 import { Loader2, Minus } from "lucide-react";
 import type { UIMessage } from "@/types";
@@ -45,6 +45,7 @@ const CHAT_TOP_PADDING_PX = 56;
 const CHAT_BOTTOM_PADDING_PX = 144;
 const CHAT_EXTRA_BOTTOM_PADDING_PX = 280;
 const CHAT_COMPOSER_CLEARANCE_PX = 24;
+const NARROW_CHAT_MESSAGE_WIDTH_THRESHOLD_PX = 900;
 // Progressive rendering: render bottom rows immediately, hydrate older rows in background
 const INITIAL_RENDER_ROWS = 20;
 const HYDRATION_BATCH_SIZE = 40;
@@ -360,6 +361,7 @@ function ChatViewContent({
   const autoGroupTools = useSettingsStore((s) => s.autoGroupTools);
   const avoidGroupingEdits = useSettingsStore((s) => s.avoidGroupingEdits);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [useFullWidthMessages, setUseFullWidthMessages] = useState(false);
 
   // ── Scroll state (refs, not state — rerender-use-ref-transient-values) ──
   const bottomLockedRef = useRef(true);
@@ -700,6 +702,24 @@ function ChatViewContent({
     return () => observer.disconnect();
   }, [contentReady, followBottomNow]);
 
+  useLayoutEffect(() => {
+    if (!contentReady) return;
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    const updateMessageWidths = () => {
+      const next = el.clientWidth <= NARROW_CHAT_MESSAGE_WIDTH_THRESHOLD_PX;
+      setUseFullWidthMessages((prev) => (prev === next ? prev : next));
+    };
+
+    updateMessageWidths();
+
+    const observer = new ResizeObserver(updateMessageWidths);
+    observer.observe(el);
+
+    return () => observer.disconnect();
+  }, [contentReady]);
+
   const handleScroll = useCallback(() => {
     if (scrollRafPending.current) return;
     scrollRafPending.current = true;
@@ -812,16 +832,23 @@ function ChatViewContent({
     );
   }
 
+  const chatContentStyle = {
+    paddingTop: `${CHAT_TOP_PADDING_PX}px`,
+    paddingBottom: `${bottomPadding}px`,
+    "--chat-assistant-message-max-width": useFullWidthMessages ? "100%" : "85%",
+    "--chat-user-message-max-width": useFullWidthMessages ? "100%" : "80%",
+  } as CSSProperties;
+
   return (
     <ChatUiStateProvider>
       <div
         ref={scrollContainerRef}
-        className="min-h-0 flex-1 overflow-y-auto"
+        className="relative min-h-0 flex-1 overflow-y-auto"
         style={{ overscrollBehaviorY: "contain" }}
         onScroll={handleScroll}
         onPointerDown={handlePointerDown}
       >
-        <div style={{ paddingTop: `${CHAT_TOP_PADDING_PX}px`, paddingBottom: `${bottomPadding}px` }}>
+        <div style={chatContentStyle}>
           {/* Single spacer for all unhydrated rows — 1 div instead of hundreds */}
           {unhydratedHeight > 0 && (
             <div style={{ height: `${unhydratedHeight}px` }} aria-hidden />

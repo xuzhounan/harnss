@@ -23,7 +23,6 @@ import {
   CHAT_CONTENT_STACK_CLASS,
   CHAT_PROSE_EDGE_CLASS,
   CHAT_ROW_CLASS,
-  CHAT_ROW_WIDTH_CLASS,
 } from "@/components/lib/chat-layout";
 
 // Stable references to avoid re-creating on every render
@@ -222,7 +221,7 @@ export const MessageBubble = memo(function MessageBubble({
     const canRevert = !!checkpointId && (!!onRevert || !!onFullRevert);
     return (
       <div className={cn("group/user flex justify-end", CHAT_ROW_CLASS, message.isQueued && "opacity-60")}>
-        <div className={cn("relative max-w-[80%]", canRevert && "pb-5")}>
+        <div className={cn("relative max-w-[var(--chat-user-message-max-width,80%)]", canRevert && "pb-5")}>
           <Tooltip>
             <TooltipTrigger asChild>
               <div className={cn(
@@ -341,7 +340,7 @@ export const MessageBubble = memo(function MessageBubble({
     >
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className={cn(CHAT_ROW_WIDTH_CLASS, assistantTurnDividerLabel && "w-full")}>
+          <div className={cn("min-w-0 max-w-[var(--chat-assistant-message-max-width,85%)]", assistantTurnDividerLabel && "w-full")}>
             <div className={cn("flow-root wrap-break-word", CHAT_CONTENT_STACK_CLASS, assistantTurnDividerLabel ? "w-full" : "min-w-0")}>
             {assistantTurnDividerLabel ? (
               <div className="relative mb-3 w-full text-center text-[11px] text-muted-foreground/70">
