@@ -118,6 +118,15 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Disable root postinstall for Windows CI
+        shell: bash
+        run: |
+          # electron-builder already rebuilds native deps during packaging.
+          # Skip the repo's dev-focused postinstall hook here because on
+          # Windows it still tries to compile the macOS-only
+          # electron-liquid-glass module and fails the job before packaging.
+          node -e "const fs=require('fs'); const pkg=require('./package.json'); delete pkg.scripts.postinstall; fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');"
+
       - name: Install dependencies
         run: pnpm install
 
