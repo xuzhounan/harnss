@@ -1,10 +1,9 @@
-import { Map, ChevronsUpDown } from "lucide-react";
+import { Map } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { UIMessage } from "@/types";
 import { extractResultText } from "@/components/lib/tool-formatting";
 import { GenericContent } from "./GenericContent";
-import { useChatPersistedState } from "@/components/chat-ui-state";
 
 const REMARK_PLUGINS = [remarkGfm];
 
@@ -22,14 +21,10 @@ export function EnterPlanModeContent({ message }: { message: UIMessage }) {
 
 // ── ExitPlanMode: rendered plan markdown ──
 
-const PLAN_COLLAPSED_HEIGHT = 400; // px — enough for a good preview before requiring expand
-
 export function ExitPlanModeContent({ message }: { message: UIMessage }) {
-  const [expanded, setExpanded] = useChatPersistedState(`plan:${message.id}`, false);
   const plan = String(message.toolInput?.plan ?? "");
   const filePath = String(message.toolInput?.filePath ?? "");
   const fileName = filePath ? filePath.split("/").pop() : null;
-  const isLong = plan.length > 2000;
 
   if (!plan) return <GenericContent message={message} />;
 
@@ -43,36 +38,12 @@ export function ExitPlanModeContent({ message }: { message: UIMessage }) {
         </div>
       )}
 
-      {/* Plan content — rendered as markdown */}
-      <div
-        className="relative"
-        style={
-          !expanded && isLong
-            ? { maxHeight: PLAN_COLLAPSED_HEIGHT, overflow: "hidden" }
-            : undefined
-        }
-      >
+      {/* Plans should always render fully expanded. */}
+      <div className="relative">
         <div className="px-4 py-3 prose dark:prose-invert prose-sm max-w-none text-foreground/80 text-[12.5px]">
           <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>{plan}</ReactMarkdown>
         </div>
-        {/* Fade overlay when collapsed and content is long */}
-        {!expanded && isLong && (
-          <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-background to-transparent pointer-events-none" />
-        )}
       </div>
-
-      {/* Expand/collapse toggle for long plans */}
-      {isLong && (
-        <div className="border-t border-border/40 px-3 py-1.5">
-          <button
-            onClick={() => setExpanded((v) => !v)}
-            className="flex items-center gap-1 text-[10px] font-medium text-foreground/40 hover:text-foreground/70 transition-colors"
-          >
-            <ChevronsUpDown className="h-3 w-3" />
-            {expanded ? "Collapse" : "Show full plan"}
-          </button>
-        </div>
-      )}
     </div>
   );
 }

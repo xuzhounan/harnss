@@ -100,15 +100,17 @@ const RegularTool = memo(function RegularTool({
   coloredToolIcons,
   disableCollapseAnimation,
 }: RegularToolProps) {
-  const isInteractive = message.toolName === "ExitPlanMode" || message.toolName === "AskUserQuestion";
+  const isPlanTool = message.toolName === "ExitPlanMode";
+  const isInteractive = isPlanTool || message.toolName === "AskUserQuestion";
   const isEditToolCall = message.toolName === "Edit" || message.toolName === "Write";
-  const defaultExpanded = isEditToolCall && expandEditToolCallsByDefault;
+  const defaultExpanded = isPlanTool || (isEditToolCall && expandEditToolCallsByDefault);
   const skipAutoExpandOnResult = isEditToolCall || isInteractive;
   const isWideTool = message.toolName === "Edit" || message.toolName === "Write" || message.toolName === "NotebookEdit";
-  const [expanded, setExpanded, hasStoredExpanded] = useChatPersistedState(
+  const [storedExpanded, setExpanded, hasStoredExpanded] = useChatPersistedState(
     `tool:${message.id}`,
     defaultExpanded,
   );
+  const expanded = isPlanTool || storedExpanded;
   const hasResult = !!message.toolResult;
   const isRunning = !hasResult;
   const isError = !!message.toolError;
@@ -138,44 +140,52 @@ const RegularTool = memo(function RegularTool({
   }, [autoExpandTools, hasResult, hasStoredExpanded, setExpanded, skipAutoExpandOnResult]);
 
   const handleOpenChange = (open: boolean) => {
+    if (isPlanTool) return;
     userToggled.current = true;
     clearTimeout(autoCollapseTimer.current);
     setExpanded(open);
   };
 
-  const trigger = (
+  const triggerContent = (
+    <div className="relative flex min-w-0 flex-1 items-center gap-[6.4px]">
+      {showToolIcons && (isError ? (
+        <ToolGlyph Icon={AlertCircle} className="text-red-400/70" />
+      ) : (
+        <ToolGlyph Icon={Icon} className={coloredToolIcons ? getToolColor(message.toolName ?? "") : "text-foreground/40"} />
+      ))}
+      {isRunning ? (
+        <TextShimmer as="span" className="shrink-0 whitespace-nowrap font-medium" duration={1.8} spread={1.5}>
+          {getToolLabel(message.toolName ?? "", "active") ?? message.toolName ?? "Running"}
+        </TextShimmer>
+      ) : (
+        <span className={`shrink-0 whitespace-nowrap font-medium ${isError ? "text-red-400/70" : "text-foreground/60"}`}>
+          {isError
+            ? `Failed to ${getToolLabel(message.toolName ?? "", "failure")}`
+            : (getToolLabel(message.toolName ?? "", "past") ?? message.toolName)}
+        </span>
+      )}
+      <span className="min-w-0 truncate text-foreground/40">{summary}</span>
+      {diffStats && (
+        <span className="shrink-0 inline-flex items-center gap-1 text-[11px] tabular-nums">
+          {diffStats.added > 0 && <span className="text-emerald-400/70">+{diffStats.added}</span>}
+          {diffStats.removed > 0 && <span className="text-red-400/70">-{diffStats.removed}</span>}
+        </span>
+      )}
+    </div>
+  );
+
+  const trigger = isPlanTool ? (
+    <div className="relative flex w-full items-center gap-2 py-1 text-start text-[13px] leading-4 text-muted-foreground overflow-hidden">
+      {triggerContent}
+    </div>
+  ) : (
     <button
       type="button"
       onClick={() => handleOpenChange(!expanded)}
       className="group relative flex w-full items-center gap-2 py-1 text-start text-[13px] leading-4 text-muted-foreground hover:text-foreground transition-colors cursor-pointer overflow-hidden"
       aria-expanded={expanded}
     >
-      <div className="relative flex min-w-0 flex-1 items-center gap-[6.4px]">
-        {showToolIcons && (isError ? (
-          <ToolGlyph Icon={AlertCircle} className="text-red-400/70" />
-        ) : (
-          <ToolGlyph Icon={Icon} className={coloredToolIcons ? getToolColor(message.toolName ?? "") : "text-foreground/40"} />
-        ))}
-        {isRunning ? (
-          <TextShimmer as="span" className="shrink-0 whitespace-nowrap font-medium" duration={1.8} spread={1.5}>
-            {getToolLabel(message.toolName ?? "", "active") ?? message.toolName ?? "Running"}
-          </TextShimmer>
-        ) : (
-          <span className={`shrink-0 whitespace-nowrap font-medium ${isError ? "text-red-400/70" : "text-foreground/60"}`}>
-            {isError
-              ? `Failed to ${getToolLabel(message.toolName ?? "", "failure")}`
-              : (getToolLabel(message.toolName ?? "", "past") ?? message.toolName)}
-          </span>
-        )}
-        <span className="min-w-0 truncate text-foreground/40">{summary}</span>
-        {diffStats && (
-          <span className="shrink-0 inline-flex items-center gap-1 text-[11px] tabular-nums">
-            {diffStats.added > 0 && <span className="text-emerald-400/70">+{diffStats.added}</span>}
-            {diffStats.removed > 0 && <span className="text-red-400/70">-{diffStats.removed}</span>}
-          </span>
-        )}
-      </div>
-
+      {triggerContent}
       {hasResult && (
         <ChevronRight
           className={`ms-auto h-3 w-3 shrink-0 text-foreground/30 opacity-0 group-hover:opacity-100 transition-all duration-200 ${
@@ -185,6 +195,17 @@ const RegularTool = memo(function RegularTool({
       )}
     </button>
   );
+
+  if (isPlanTool) {
+    return (
+      <div className={isWideTool ? "block w-full min-w-0" : undefined}>
+        {trigger}
+        <div className={`${CHAT_COLLAPSIBLE_CONTENT_CLASS} ${isWideTool ? "w-full min-w-0" : ""}`}>
+          <ExpandedToolContent message={message} />
+        </div>
+      </div>
+    );
+  }
 
   // Fast path: conditional rendering — collapsed tools render ZERO heavy content.
   // Radix Collapsible is only used when collapse animation is needed (AgentTranscriptViewer).

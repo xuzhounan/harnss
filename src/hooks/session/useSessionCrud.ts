@@ -4,7 +4,11 @@ import type { ChatSession, McpServerConfig, PersistedSession, Project, ACPConfig
 import { suppressNextSessionCompletion } from "../../lib/notification-utils";
 import { capture } from "../../lib/analytics/analytics";
 import { bgAgentStore } from "../../lib/background/agent-store";
-import { DRAFT_ID } from "./types";
+import {
+  DRAFT_ID,
+  DEFAULT_PERMISSION_MODE,
+  getEffectiveClaudePermissionMode,
+} from "./types";
 import type { SharedSessionRefs, SharedSessionSetters, EngineHooks, StartOptions } from "./types";
 
 interface UseSessionCrudParams {
@@ -85,6 +89,38 @@ export function useSessionCrud({
 
   const switchRequestIdRef = useRef(0);
 
+  const clearSessionPlanMode = useCallback((session: ChatSession) => {
+    const normalizedPermissionMode = session.permissionMode?.trim() || DEFAULT_PERMISSION_MODE;
+
+    setSessions((prev) => prev.map((entry) => (
+      entry.id === session.id && entry.planMode
+        ? { ...entry, planMode: false }
+        : entry
+    )));
+
+    window.claude.sessions.load(session.projectId, session.id).then((data) => {
+      if (!data?.planMode) return;
+      return window.claude.sessions.save({ ...data, planMode: false });
+    }).catch(() => { /* session may have been deleted */ });
+
+    if ((session.engine ?? "claude") !== "claude" || !liveSessionIdsRef.current.has(session.id)) {
+      return;
+    }
+
+    const effectiveMode = getEffectiveClaudePermissionMode({
+      permissionMode: normalizedPermissionMode,
+      planMode: false,
+    });
+    window.claude.setPermissionMode(session.id, effectiveMode).then((result) => {
+      if (result?.error) {
+        toast.error("Failed to update plan mode", { description: result.error });
+      }
+    }).catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error("Failed to update plan mode", { description: message });
+    });
+  }, [liveSessionIdsRef, setSessions]);
+
   // ── Create a new session (draft) ──
 
   const createSession = useCallback(
@@ -154,13 +190,14 @@ export function useSessionCrud({
 
       const session = sessionsRef.current.find((s) => s.id === id);
       if (!session) return;
+      clearSessionPlanMode(session);
       setStartOptions((prev) => ({
         ...prev,
         engine: session.engine ?? "claude",
         model: session.model,
         effort: session.effort,
         permissionMode: session.permissionMode,
-        planMode: !!session.planMode,
+        planMode: false,
         agentId: session.agentId,
       }));
 
@@ -174,12 +211,18 @@ export function useSessionCrud({
       // Restore from the in-memory session cache if available.
       const bgState = backgroundStoreRef.current.consume(id);
       if (bgState) {
+        const normalizedBgSessionInfo = bgState.sessionInfo?.permissionMode === "plan"
+          ? {
+              ...bgState.sessionInfo,
+              permissionMode: session.permissionMode?.trim() || DEFAULT_PERMISSION_MODE,
+            }
+          : bgState.sessionInfo;
         startTransition(() => {
           setInitialMessages(bgState.messages);
           setInitialMeta({
             isProcessing: bgState.isProcessing,
             isConnected: bgState.isConnected,
-            sessionInfo: bgState.sessionInfo,
+            sessionInfo: normalizedBgSessionInfo,
             totalCost: bgState.totalCost,
             contextUsage: bgState.contextUsage,
             isCompacting: bgState.isCompacting,
@@ -203,7 +246,7 @@ export function useSessionCrud({
 
       const cachedData = consumeCachedSessionPayload(id);
       if (cachedData) {
-        applyLoadedSession(id, cachedData);
+        applyLoadedSession(id, { ...cachedData, planMode: false });
         return;
       }
 
@@ -211,10 +254,10 @@ export function useSessionCrud({
       const data = await window.claude.sessions.load(session.projectId, id);
       if (requestId !== switchRequestIdRef.current) return;
       if (data) {
-        cacheSessionPayload(data);
+        cacheSessionPayload({ ...data, planMode: false });
         const restored = consumeCachedSessionPayload(id);
         if (restored) {
-          applyLoadedSession(id, restored);
+          applyLoadedSession(id, { ...restored, planMode: false });
         }
       }
     },

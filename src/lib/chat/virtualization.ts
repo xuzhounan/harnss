@@ -68,6 +68,12 @@ export function estimateRowHeight(row: RowDescriptor): number {
   if (msg.role === "summary") return 48;
 
   if (msg.role === "tool_call") {
+    if (msg.toolName === "ExitPlanMode") {
+      const plan = typeof msg.toolInput?.plan === "string" ? msg.toolInput.plan : "";
+      const lines = estimateLineCount(plan);
+      return Math.min(1200, 88 + lines * LINE_HEIGHT_PX);
+    }
+
     // Collapsed tool: header only ~36px.
     // Expanded edit/write: header + diff/content, but most tools are collapsed in history.
     return 36;

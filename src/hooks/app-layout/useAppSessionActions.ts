@@ -3,6 +3,7 @@ import { useProjectManager } from "@/hooks/useProjectManager";
 import { useSessionManager } from "@/hooks/useSessionManager";
 import { useSettingsCompat } from "@/hooks/useSettingsCompat";
 import type { ImageAttachment, InstalledAgent, ClaudeEffort, EngineId } from "@/types";
+import type { SettingsSection } from "@/components/SettingsView";
 import { buildSessionOptions } from "./session-utils";
 
 type SessionManagerState = ReturnType<typeof useSessionManager>;
@@ -14,7 +15,7 @@ interface UseAppSessionActionsInput {
   settings: SettingsState;
   selectedAgent: InstalledAgent | null;
   setSelectedAgent: (agent: InstalledAgent | null) => void;
-  setShowSettings: (show: boolean) => void;
+  setShowSettings: (show: SettingsSection | false) => void;
   refreshAgents: () => Promise<void> | void;
   activeSpaceId: string;
   projectManager: Pick<ProjectManagerState, "projects" | "createProject" | "createDevProject">;
@@ -88,12 +89,13 @@ export function useAppSessionActions(input: UseAppSessionActionsInput) {
 
   const handleNewChat = useCallback(async (projectId: string) => {
     input.setShowSettings(false);
+    input.settings.setPlanMode(false);
     const wantedEngine = input.selectedAgent?.engine ?? "claude";
     const options = buildSessionOptions(
       wantedEngine,
       input.settings.getModelForEngine,
       input.settings.permissionMode,
-      input.settings.planMode,
+      false,
       input.settings.thinking,
       getClaudeEffortForModel,
       input.selectedAgent,
@@ -165,8 +167,9 @@ export function useAppSessionActions(input: UseAppSessionActionsInput) {
 
   const handleSelectSession = useCallback((sessionId: string) => {
     input.setShowSettings(false);
+    input.settings.setPlanMode(false);
     input.manager.switchSession(sessionId);
-  }, [input.manager, input.setShowSettings]);
+  }, [input.manager, input.setShowSettings, input.settings]);
 
   const handleCreateProject = useCallback(async () => {
     input.setShowSettings(false);
@@ -190,9 +193,10 @@ export function useAppSessionActions(input: UseAppSessionActionsInput) {
   }, [input.activeSpaceId, input.manager.refreshSessions, input.projectManager.createDevProject, input.projectManager.projects]);
 
   const handleNavigateToMessage = useCallback((sessionId: string, setScrollToMessageId: (messageId: string) => void, messageId: string) => {
+    input.settings.setPlanMode(false);
     input.manager.switchSession(sessionId);
     setTimeout(() => setScrollToMessageId(messageId), 200);
-  }, [input.manager]);
+  }, [input.manager, input.settings]);
 
   useEffect(() => {
     const agentId = input.manager.activeSession?.agentId;
