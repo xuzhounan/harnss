@@ -108,6 +108,7 @@ export function useSessionCache({
             ...(data.permissionMode ? { permissionMode: data.permissionMode } : {}),
             planMode: !!data.planMode,
             hasPendingPermission: false,
+            hasUnreadCompletion: false,
           } : {}),
         })),
       );
@@ -141,7 +142,21 @@ export function useSessionCache({
       projects.map((p) => window.claude.sessions.list(p.id)),
     ).then((results) => {
       const all = results.flat().map((session) => toChatSession(session, false));
-      setSessions(all);
+      setSessions((prev) => {
+        const existingById = new Map(prev.map((session) => [session.id, session]));
+        return all.map((session) => {
+          const existing = existingById.get(session.id);
+          if (!existing) return session;
+          return {
+            ...session,
+            isActive: existing.isActive,
+            isProcessing: existing.isProcessing,
+            hasPendingPermission: existing.hasPendingPermission,
+            hasUnreadCompletion: existing.hasUnreadCompletion,
+            titleGenerating: existing.titleGenerating,
+          };
+        });
+      });
     }).catch(() => { /* IPC failure — leave sessions empty */ });
   }, [projects]);
 

@@ -27,17 +27,19 @@ export function useMessageQueue({ refs, setters, engines, activeSessionId }: Use
     activeSessionIdRef,
     sessionsRef,
     liveSessionIdsRef,
+    backgroundStoreRef,
     messageQueueRef,
     messagesRef,
     startOptionsRef,
     codexEffortRef,
   } = refs;
-  const isDrainingRef = useRef(false);
+  const drainingSessionIdsRef = useRef<Set<string>>(new Set());
   const boundaryWaitRef = useRef<Map<string, BoundaryWaitState>>(new Map());
   // Guards against draining with stale isProcessing from the previous session.
   // When activeSessionId changes, engine.isProcessing still reflects the OLD session's
   // value until useEngineBase's reset effect runs — which happens AFTER the drain effect.
   const sessionSwitchGuardRef = useRef(false);
+  const [switchDrainRetryTick, setSwitchDrainRetryTick] = useState(0);
   const [sendNextId, setSendNextId] = useState<string | null>(null);
 
   const getPendingToolMessageIds = useCallback((messages: UIMessage[]) => {
@@ -68,6 +70,83 @@ export function useMessageQueue({ refs, setters, engines, activeSessionId }: Use
     messageQueueRef.current.set(sessionId, created);
     return created;
   }, [messageQueueRef]);
+
+  const getSessionEngine = useCallback((sessionId: string) => {
+    return sessionsRef.current.find((s) => s.id === sessionId)?.engine ?? "claude";
+  }, [sessionsRef]);
+
+  const reorderSentQueuedMessage = useCallback((prev: UIMessage[], messageId: string) => {
+    const index = prev.findIndex((m) => m.id === messageId);
+    if (index < 0) return prev;
+    const sentMessage = { ...prev[index], isQueued: false };
+    const rest = prev.filter((m) => m.id !== messageId);
+    const nonQueued = rest.filter((m) => !m.isQueued);
+    const queued = rest.filter((m) => m.isQueued);
+    return [...nonQueued, sentMessage, ...queued];
+  }, []);
+
+  const updateSessionMessages = useCallback((
+    sessionId: string,
+    sessionEngine: "claude" | "acp" | "codex",
+    updater: (prev: UIMessage[]) => UIMessage[],
+  ) => {
+    if (sessionId === activeSessionIdRef.current) {
+      const targetSetMessages = sessionEngine === "codex"
+        ? codex.setMessages
+        : sessionEngine === "acp"
+          ? acp.setMessages
+          : claude.setMessages;
+      targetSetMessages(updater);
+      return;
+    }
+    backgroundStoreRef.current.updateMessages(sessionId, updater);
+  }, [activeSessionIdRef, acp.setMessages, backgroundStoreRef, claude.setMessages, codex.setMessages]);
+
+  const setSessionProcessing = useCallback((
+    sessionId: string,
+    sessionEngine: "claude" | "acp" | "codex",
+    isProcessing: boolean,
+  ) => {
+    if (sessionId === activeSessionIdRef.current) {
+      const targetSetIsProcessing = sessionEngine === "codex"
+        ? codex.setIsProcessing
+        : sessionEngine === "acp"
+          ? acp.setIsProcessing
+          : claude.setIsProcessing;
+      targetSetIsProcessing(isProcessing);
+      return;
+    }
+    backgroundStoreRef.current.setProcessing(sessionId, isProcessing);
+  }, [activeSessionIdRef, acp.setIsProcessing, backgroundStoreRef, claude.setIsProcessing, codex.setIsProcessing]);
+
+  const clearQueueForSession = useCallback((sessionId: string) => {
+    if (!sessionId || sessionId === DRAFT_ID) {
+      if (sessionId === activeSessionIdRef.current) {
+        setQueuedCount(0);
+      }
+      return;
+    }
+
+    const queue = messageQueueRef.current.get(sessionId) ?? [];
+    const queuedIds = new Set(queue.map((q) => q.messageId));
+    messageQueueRef.current.delete(sessionId);
+    boundaryWaitRef.current.delete(sessionId);
+    drainingSessionIdsRef.current.delete(sessionId);
+    setSendNextId((prev) => (prev && queuedIds.has(prev) ? null : prev));
+    if (sessionId === activeSessionIdRef.current) {
+      setQueuedCount(0);
+    }
+    if (queuedIds.size === 0) return;
+
+    const sessionEngine = getSessionEngine(sessionId);
+    updateSessionMessages(sessionId, sessionEngine, (prev) => prev.filter((m) => !queuedIds.has(m.id)));
+  }, [
+    activeSessionIdRef,
+    getSessionEngine,
+    messageQueueRef,
+    setQueuedCount,
+    updateSessionMessages,
+  ]);
 
   /** Add a message to the queue and show it in chat immediately with isQueued styling */
   const enqueueMessage = useCallback((text: string, images?: ImageAttachment[], displayText?: string) => {
@@ -128,121 +207,124 @@ export function useMessageQueue({ refs, setters, engines, activeSessionId }: Use
       setQueuedCount(0);
       return;
     }
+    clearQueueForSession(activeId);
+  }, [activeSessionIdRef, clearQueueForSession, setQueuedCount]);
 
-    const queue = messageQueueRef.current.get(activeId) ?? [];
-    const queuedIds = new Set(queue.map((q) => q.messageId));
-    messageQueueRef.current.delete(activeId);
-    boundaryWaitRef.current.delete(activeId);
-    setSendNextId(null);
-    setQueuedCount(0);
-    if (queuedIds.size > 0) {
-      engine.setMessages((prev) => prev.filter((m) => !queuedIds.has(m.id)));
-    }
-  }, [activeSessionIdRef, engine.setMessages, messageQueueRef, setQueuedCount]);
+  const drainQueuedMessageForSession = useCallback(async (sessionId: string) => {
+    if (!sessionId || sessionId === DRAFT_ID) return false;
+    if (drainingSessionIdsRef.current.has(sessionId)) return false;
+    if (!liveSessionIdsRef.current.has(sessionId)) return false;
 
-  const drainNextQueuedMessage = useCallback(async () => {
-    if (isDrainingRef.current) return;
-    if (engine.isProcessing) return;
+    const isActiveSession = sessionId === activeSessionIdRef.current;
+    const sessionProcessing = isActiveSession
+      ? engine.isProcessing
+      : (backgroundStoreRef.current.get(sessionId)?.isProcessing ?? false);
+    if (sessionProcessing) return false;
 
-    const activeId = activeSessionIdRef.current;
-    if (!activeId || activeId === DRAFT_ID) return;
-    if (!liveSessionIdsRef.current.has(activeId)) return;
-    const queue = messageQueueRef.current.get(activeId);
-    if (!queue || queue.length === 0) return;
+    const queue = messageQueueRef.current.get(sessionId);
+    if (!queue || queue.length === 0) return false;
 
-    const sessionEngine = sessionsRef.current.find((s) => s.id === activeId)?.engine ?? "claude";
-    const targetSetMessages = sessionEngine === "codex" ? codex.setMessages : sessionEngine === "acp" ? acp.setMessages : claude.setMessages;
-    const targetSetIsProcessing = sessionEngine === "codex" ? codex.setIsProcessing : sessionEngine === "acp" ? acp.setIsProcessing : claude.setIsProcessing;
-
+    const sessionEngine = getSessionEngine(sessionId);
     const next = queue.shift()!;
     if (queue.length === 0) {
-      messageQueueRef.current.delete(activeId);
-      boundaryWaitRef.current.delete(activeId);
+      messageQueueRef.current.delete(sessionId);
+      boundaryWaitRef.current.delete(sessionId);
     }
     setSendNextId((prev) => prev === next.messageId ? null : prev);
-    setQueuedCount(queue.length);
-    isDrainingRef.current = true;
+    if (isActiveSession) {
+      setQueuedCount(queue.length);
+    }
+    drainingSessionIdsRef.current.add(sessionId);
 
-    // Clear isQueued and move the just-sent user message to the bottom of the
-    // non-queued section so it appears where it was actually sent.
-    targetSetMessages((prev) => {
-      const index = prev.findIndex((m) => m.id === next.messageId);
-      if (index < 0) return prev;
-      const sentMessage = { ...prev[index], isQueued: false };
-      const rest = prev.filter((m) => m.id !== next.messageId);
-      const nonQueued = rest.filter((m) => !m.isQueued);
-      const queued = rest.filter((m) => m.isQueued);
-      return [...nonQueued, sentMessage, ...queued];
-    });
+    updateSessionMessages(sessionId, sessionEngine, (prev) => reorderSentQueuedMessage(prev, next.messageId));
 
-    const handleSendError = () => {
-      targetSetMessages((prev) => [
+    const handleSendError = (message = "Failed to send queued message.") => {
+      updateSessionMessages(sessionId, sessionEngine, (prev) => [
         ...prev,
-        createSystemMessage("Failed to send queued message.", true),
+        createSystemMessage(message, true),
       ]);
-      targetSetIsProcessing(false);
-      clearQueue();
+      clearQueueForSession(sessionId);
+      setSessionProcessing(sessionId, sessionEngine, false);
     };
 
     try {
       if (sessionEngine === "acp") {
-        targetSetIsProcessing(true);
-        const result = await window.claude.acp.prompt(activeId, next.text, next.images);
-        if (result?.error) handleSendError();
+        setSessionProcessing(sessionId, sessionEngine, true);
+        const result = await window.claude.acp.prompt(sessionId, next.text, next.images);
+        if (result?.error) handleSendError("Failed to send queued message.");
       } else if (sessionEngine === "codex") {
-        targetSetIsProcessing(true);
-        const session = sessionsRef.current.find((s) => s.id === activeId);
+        setSessionProcessing(sessionId, sessionEngine, true);
+        const session = sessionsRef.current.find((s) => s.id === sessionId);
         let codexCollabMode: CollaborationMode | undefined;
         try {
           codexCollabMode = buildCodexCollabMode(startOptionsRef.current.planMode, session?.model);
         } catch (err) {
-          targetSetMessages((prev) => [
+          updateSessionMessages(sessionId, sessionEngine, (prev) => [
             ...prev,
             createSystemMessage(err instanceof Error ? err.message : String(err), true),
           ]);
-          targetSetIsProcessing(false);
-          clearQueue();
-          return;
+          clearQueueForSession(sessionId);
+          setSessionProcessing(sessionId, sessionEngine, false);
+          return false;
         }
         const result = await window.claude.codex.send(
-          activeId,
+          sessionId,
           next.text,
           imageAttachmentsToCodexInputs(next.images),
           codexEffortRef.current,
           codexCollabMode,
         );
-        if (result?.error) handleSendError();
+        if (result?.error) handleSendError("Failed to send queued message.");
       } else {
-        targetSetIsProcessing(true);
+        setSessionProcessing(sessionId, sessionEngine, true);
         const content = buildSdkContent(next.text, next.images);
-        const result = await window.claude.send(activeId, {
+        const result = await window.claude.send(sessionId, {
           type: "user",
           message: { role: "user", content },
         });
-        if (result?.error || result?.ok === false) handleSendError();
+        if (result?.error || result?.ok === false) handleSendError("Failed to send queued message.");
       }
+      return true;
     } catch {
-      handleSendError();
+      handleSendError("Failed to send queued message.");
+      return false;
     } finally {
-      isDrainingRef.current = false;
+      drainingSessionIdsRef.current.delete(sessionId);
     }
   }, [
     activeSessionIdRef,
-    acp.setIsProcessing,
-    acp.setMessages,
-    claude.setIsProcessing,
-    claude.setMessages,
-    clearQueue,
-    codex.setIsProcessing,
-    codex.setMessages,
+    backgroundStoreRef,
+    clearQueueForSession,
     codexEffortRef,
     engine.isProcessing,
+    getSessionEngine,
     liveSessionIdsRef,
     messageQueueRef,
+    reorderSentQueuedMessage,
     sessionsRef,
     setQueuedCount,
+    setSessionProcessing,
     startOptionsRef,
+    updateSessionMessages,
   ]);
+
+  const drainNextQueuedMessage = useCallback(async () => {
+    const activeId = activeSessionIdRef.current;
+    if (!activeId || activeId === DRAFT_ID) return false;
+    return drainQueuedMessageForSession(activeId);
+  }, [activeSessionIdRef, drainQueuedMessageForSession]);
+
+  const continueQueuedBackgroundSession = useCallback((sessionId: string) => {
+    if (!sessionId || sessionId === DRAFT_ID) return false;
+    if (sessionId === activeSessionIdRef.current) return false;
+    if (drainingSessionIdsRef.current.has(sessionId)) return false;
+    if (!liveSessionIdsRef.current.has(sessionId)) return false;
+    if (backgroundStoreRef.current.get(sessionId)?.isProcessing) return false;
+    const queue = messageQueueRef.current.get(sessionId);
+    if (!queue || queue.length === 0) return false;
+    void drainQueuedMessageForSession(sessionId);
+    return true;
+  }, [activeSessionIdRef, backgroundStoreRef, drainQueuedMessageForSession, liveSessionIdsRef, messageQueueRef]);
 
   const unqueueMessage = useCallback((messageId: string) => {
     const activeId = activeSessionIdRef.current;
@@ -381,9 +463,13 @@ export function useMessageQueue({ refs, setters, engines, activeSessionId }: Use
   }, [activeSessionId, messageQueueRef, setQueuedCount]);
 
   // Mark session switches so the drain effect below skips one cycle.
+  // Also bump a retry tick so we always get a second pass after the new
+  // session state's reset effect has had a chance to settle, even when the
+  // restored session is already idle and `isProcessing` stays false.
   // Declared BEFORE the drain effect so it runs first (React fires effects in declaration order).
   useEffect(() => {
     sessionSwitchGuardRef.current = true;
+    setSwitchDrainRetryTick((prev) => prev + 1);
   }, [activeSessionId]);
 
   useEffect(() => {
@@ -395,7 +481,14 @@ export function useMessageQueue({ refs, setters, engines, activeSessionId }: Use
     }
     if (engine.isProcessing) return;
     void drainNextQueuedMessage();
-  }, [activeSessionId, drainNextQueuedMessage, engine.isProcessing]);
+  }, [activeSessionId, drainNextQueuedMessage, engine.isProcessing, switchDrainRetryTick]);
 
-  return { enqueueMessage, clearQueue, unqueueMessage, sendQueuedMessageNext, sendNextId };
+  return {
+    enqueueMessage,
+    clearQueue,
+    unqueueMessage,
+    sendQueuedMessageNext,
+    continueQueuedBackgroundSession,
+    sendNextId,
+  };
 }

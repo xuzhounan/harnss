@@ -128,6 +128,11 @@ export function SessionItem({
               isActive ? "text-current opacity-80" : "text-sidebar-foreground/60"
             }`}
           />
+        ) : session.hasUnreadCompletion && !isActive ? (
+          <span className="relative flex h-3 w-3 shrink-0 items-center justify-center">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400/60" />
+            <span className="relative h-2.5 w-2.5 rounded-full bg-emerald-500" />
+          </span>
         ) : (
           <span className="relative flex shrink-0 items-center">
             <AgentIcon

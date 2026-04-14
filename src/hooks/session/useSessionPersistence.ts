@@ -2,6 +2,7 @@ import { useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import type { PersistedSession, ClaudeEvent, SystemInitEvent, EngineId, ACPSessionEvent, ACPPermissionEvent, ACPTurnCompleteEvent } from "@/types";
 import { canonicalizeModelValue } from "@/lib/model-utils";
+import { getSessionNotificationActor } from "@/lib/session-notifications";
 import { toMcpStatusState } from "../../lib/mcp-utils";
 import { buildPersistedSession } from "../../lib/session/records";
 import { normalizeToolInput as acpNormalizeToolInput, pickAutoResponseOption } from "../../lib/engine/acp-adapter";
@@ -13,6 +14,7 @@ interface UseSessionPersistenceParams {
   setters: SharedSessionSetters;
   engines: EngineHooks;
   activeSessionId: string | null;
+  continueQueuedBackgroundSession?: (sessionId: string) => boolean;
 }
 
 export function useSessionPersistence({
@@ -20,6 +22,7 @@ export function useSessionPersistence({
   setters,
   engines,
   activeSessionId,
+  continueQueuedBackgroundSession,
 }: UseSessionPersistenceParams) {
   const { claude, acp, codex, engine } = engines;
   const { messages, totalCost, sessionInfo } = engine;
@@ -75,15 +78,28 @@ export function useSessionPersistence({
       const wasProcessing = !!session?.isProcessing;
       setSessions((prev) =>
         prev.map((s) =>
-          s.id === sessionId ? { ...s, isProcessing } : s,
+          s.id === sessionId
+            ? {
+                ...s,
+                isProcessing,
+                ...(isProcessing
+                  ? { hasUnreadCompletion: false }
+                  : { hasUnreadCompletion: true })
+              }
+            : s,
         ),
       );
 
-      if (wasProcessing && !isProcessing && session) {
+      const continuedQueuedSession = wasProcessing && !isProcessing
+        ? !!continueQueuedBackgroundSession?.(sessionId)
+        : false;
+
+      if (wasProcessing && !isProcessing && session && !continuedQueuedSession) {
         window.dispatchEvent(new CustomEvent("harnss:background-session-complete", {
           detail: {
             sessionId,
             sessionTitle: session.title,
+            actor: getSessionNotificationActor(session),
           },
         }));
       }
@@ -117,11 +133,12 @@ export function useSessionPersistence({
         detail: {
           sessionId,
           sessionTitle,
+          actor: getSessionNotificationActor(session),
           permission,
         },
       }));
     };
-  }, []);
+  }, [continueQueuedBackgroundSession, sessionsRef, setSessions, switchSessionRef, backgroundStoreRef]);
 
   // Handle session exits across all engines
   useEffect(() => {

@@ -169,6 +169,19 @@ export class BackgroundSessionStore {
     this.sessions.delete(sessionId);
   }
 
+  updateMessages(sessionId: string, updater: (messages: UIMessage[]) => UIMessage[]): void {
+    const state = this.sessions.get(sessionId);
+    if (!state) return;
+    state.messages = updater(state.messages);
+  }
+
+  setProcessing(sessionId: string, isProcessing: boolean): void {
+    const state = this.sessions.get(sessionId);
+    if (!state || state.isProcessing === isProcessing) return;
+    state.isProcessing = isProcessing;
+    this.onProcessingChange?.(sessionId, isProcessing);
+  }
+
   /** Seed store with the current session state when switching away. */
   initFromState(sessionId: string, state: BackgroundSessionState): void {
     const parentToolMap = new Map<string, string>();

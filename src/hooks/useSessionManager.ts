@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import type { ChatSession, UIMessage, PermissionRequest, McpServerStatus, McpServerConfig, ModelInfo, AcpPermissionBehavior, EngineId, Project, ACPAuthenticateResult, ACPConfigOption, ACPPermissionEvent } from "@/types";
 import { toMcpStatusState } from "../lib/mcp-utils";
 import { toChatSession } from "../lib/session/records";
@@ -56,6 +56,20 @@ export function useSessionManager(
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   const backgroundStoreRef = useRef(new BackgroundSessionStore());
+
+  useEffect(() => {
+    if (visibleSplitSessionIds.length === 0) return;
+    const visibleIds = new Set(visibleSplitSessionIds);
+    setSessions((prev) => {
+      let changed = false;
+      const next = prev.map((session) => {
+        if (!visibleIds.has(session.id) || !session.hasUnreadCompletion) return session;
+        changed = true;
+        return { ...session, hasUnreadCompletion: false };
+      });
+      return changed ? next : prev;
+    });
+  }, [visibleSplitSessionIds]);
 
   // ── Determine active engine ──
   const activeEngine: EngineId = activeSessionId === DRAFT_ID
@@ -251,13 +265,21 @@ export function useSessionManager(
   };
 
   // ── Compose sub-hooks ──
-  const { enqueueMessage, clearQueue, unqueueMessage, sendQueuedMessageNext, sendNextId } = useMessageQueue({ refs, setters, engines, activeSessionId });
+  const {
+    enqueueMessage,
+    clearQueue,
+    unqueueMessage,
+    sendQueuedMessageNext,
+    continueQueuedBackgroundSession,
+    sendNextId,
+  } = useMessageQueue({ refs, setters, engines, activeSessionId });
 
   const { saveCurrentSession, seedBackgroundStore, generateSessionTitle } = useSessionPersistence({
     refs,
     setters,
     engines,
     activeSessionId,
+    continueQueuedBackgroundSession,
   });
 
   const {
@@ -365,8 +387,20 @@ export function useSessionManager(
     );
     setSessions((prev) => {
       const keep = prev.filter((s) => !uniqueIds.includes(s.projectId));
+      const existingById = new Map(prev.map((session) => [session.id, session]));
       const map = new Map<string, ChatSession>();
-      [...keep, ...refreshed].forEach((s) => map.set(s.id, s));
+      [...keep, ...refreshed].forEach((session) => {
+        const existing = existingById.get(session.id);
+        map.set(session.id, existing
+          ? {
+              ...session,
+              isProcessing: existing.isProcessing,
+              hasPendingPermission: existing.hasPendingPermission,
+              hasUnreadCompletion: existing.hasUnreadCompletion,
+              titleGenerating: existing.titleGenerating,
+            }
+          : session);
+      });
       return Array.from(map.values()).sort((a, b) => (b.lastMessageAt ?? b.createdAt) - (a.lastMessageAt ?? a.createdAt));
     });
   }, [setSessions]);

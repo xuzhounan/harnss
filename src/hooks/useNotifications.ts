@@ -1,10 +1,11 @@
-import { useEffect, useRef } from "react";
-import type { PermissionRequest, NotificationSettings, NotificationTrigger } from "@/types";
+import { useEffect, useEffectEvent, useRef } from "react";
+import type { ChatSession, PermissionRequest, NotificationSettings, NotificationTrigger, SessionInfo } from "@/types";
 import {
   advanceSessionCompletionTracker,
   consumeSuppressedSessionCompletion,
   shouldNotifyPermissionRequest,
 } from "@/lib/notification-utils";
+import { getSessionNotificationActor } from "@/lib/session-notifications";
 
 // ── Defaults (used when AppSettings hasn't loaded yet) ──
 
@@ -46,12 +47,17 @@ function fireNotification(
   eventSettings: { osNotification: NotificationTrigger; sound: NotificationTrigger },
   title: string,
   body: string,
+  onClick?: () => void,
 ): void {
   if (shouldFire(eventSettings.osNotification)) {
     // Web Notification API — Electron auto-grants permission.
     // silent: true prevents OS from playing its own sound (we manage sound separately).
     const notification = new Notification(title, { body, silent: true });
-    notification.onclick = () => window.focus();
+    notification.onclick = () => {
+      window.focus();
+      onClick?.();
+      notification.close();
+    };
   }
 
   if (shouldFire(eventSettings.sound)) {
@@ -76,20 +82,21 @@ function classifyEvent(
 function getNotificationContent(
   eventType: "exitPlanMode" | "askUserQuestion" | "permissions",
   request: PermissionRequest,
+  actor: string,
 ): { title: string; body: string } {
   switch (eventType) {
     case "exitPlanMode":
       return {
         title: "Ready to implement",
-        body: "Claude has a plan and is waiting for your approval.",
+        body: `${actor} has a plan and is waiting for your approval.`,
       };
     case "askUserQuestion": {
       const questions = request.toolInput?.questions as
         | Array<{ question: string }>
         | undefined;
       return {
-        title: "Question from Claude",
-        body: questions?.[0]?.question ?? "Claude is asking you a question.",
+        title: `Question from ${actor}`,
+        body: questions?.[0]?.question ?? `${actor} is asking you a question.`,
       };
     }
     case "permissions": {
@@ -112,18 +119,23 @@ interface UseNotificationsOptions {
   pendingPermission: PermissionRequest | null;
   notificationSettings: NotificationSettings | null;
   activeSessionId: string | null;
+  activeSession: ChatSession | null;
+  sessionInfo: SessionInfo | null;
   /** Whether the agent is currently processing (used to detect session completion) */
   isProcessing: boolean;
+  onOpenSession?: (sessionId: string) => void;
 }
 
 interface BackgroundSessionCompleteDetail {
   sessionId: string;
   sessionTitle: string;
+  actor: string;
 }
 
 interface BackgroundPermissionDetail {
   sessionId: string;
   sessionTitle: string;
+  actor: string;
   permission: PermissionRequest;
 }
 
@@ -131,9 +143,16 @@ export function useNotifications({
   pendingPermission,
   notificationSettings,
   activeSessionId,
+  activeSession,
+  sessionInfo,
   isProcessing,
+  onOpenSession,
 }: UseNotificationsOptions): void {
   const settings = notificationSettings ?? FALLBACK;
+  const activeActor = getSessionNotificationActor(activeSession, sessionInfo);
+  const openSession = useEffectEvent((sessionId: string) => {
+    onOpenSession?.(sessionId);
+  });
 
   // ── Permission-based notifications ──
 
@@ -153,9 +172,14 @@ export function useNotifications({
 
     const eventType = classifyEvent(pendingPermission.toolName);
     const eventSettings = settings[eventType];
-    const { title, body } = getNotificationContent(eventType, pendingPermission);
-    fireNotification(eventSettings, title, body);
-  }, [activeSessionId, pendingPermission, settings]);
+    const { title, body } = getNotificationContent(eventType, pendingPermission, activeActor);
+    fireNotification(
+      eventSettings,
+      title,
+      body,
+      activeSessionId ? () => openSession(activeSessionId) : undefined,
+    );
+  }, [activeActor, activeSessionId, openSession, pendingPermission, settings]);
 
   // ── Session completion notification ──
 
@@ -176,10 +200,11 @@ export function useNotifications({
       fireNotification(
         settings.sessionComplete,
         "Task complete",
-        "Claude has finished processing.",
+        `${activeActor} has finished processing.`,
+        current.sessionId ? () => openSession(current.sessionId) : undefined,
       );
     }
-  }, [activeSessionId, isProcessing, settings]);
+  }, [activeActor, activeSessionId, isProcessing, openSession, settings]);
 
   // ── Background session notifications ──
   useEffect(() => {
@@ -191,7 +216,8 @@ export function useNotifications({
       fireNotification(
         settings.sessionComplete,
         "Task complete",
-        `${title} has finished processing.`,
+        `${title}: ${detail.actor} has finished processing.`,
+        () => openSession(detail.sessionId),
       );
     };
 
@@ -206,11 +232,16 @@ export function useNotifications({
       }
       const eventType = classifyEvent(detail.permission.toolName);
       const eventSettings = settings[eventType];
-      const { title, body } = getNotificationContent(eventType, detail.permission);
+      const { title, body } = getNotificationContent(eventType, detail.permission, detail.actor);
       const sessionPrefix = detail.sessionTitle
         ? `${detail.sessionTitle}: `
         : "";
-      fireNotification(eventSettings, title, `${sessionPrefix}${body}`);
+      fireNotification(
+        eventSettings,
+        title,
+        `${sessionPrefix}${body}`,
+        () => openSession(detail.sessionId),
+      );
     };
 
     window.addEventListener("harnss:background-session-complete", onBackgroundComplete as EventListener);
@@ -219,5 +250,5 @@ export function useNotifications({
       window.removeEventListener("harnss:background-session-complete", onBackgroundComplete as EventListener);
       window.removeEventListener("harnss:background-permission-request", onBackgroundPermission as EventListener);
     };
-  }, [settings]);
+  }, [openSession, settings]);
 }

@@ -101,7 +101,10 @@ export function useAppOrchestrator() {
     theme: settings.theme,
     pendingPermission: manager.pendingPermission,
     activeSessionId: manager.activeSessionId,
+    activeSession: manager.activeSession,
+    sessionInfo: manager.sessionInfo,
     isProcessing: manager.isProcessing,
+    onOpenSession: manager.switchSession,
   });
 
   const sessionActions = useAppSessionActions({

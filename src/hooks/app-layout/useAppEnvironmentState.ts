@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useGlassOrchestrator } from "@/hooks/useGlassOrchestrator";
 import { useNotifications } from "@/hooks/useNotifications";
-import type { MacBackgroundEffect, NotificationSettings, PermissionRequest, ThemeOption } from "@/types";
+import type { ChatSession, MacBackgroundEffect, NotificationSettings, PermissionRequest, SessionInfo, ThemeOption } from "@/types";
+import type { SettingsSection } from "@/components/SettingsView";
 
 interface UseAppEnvironmentStateInput {
   macBackgroundEffect: MacBackgroundEffect;
@@ -10,11 +11,14 @@ interface UseAppEnvironmentStateInput {
   theme: ThemeOption;
   pendingPermission: PermissionRequest | null;
   activeSessionId: string | null;
+  activeSession: ChatSession | null;
+  sessionInfo: SessionInfo | null;
   isProcessing: boolean;
+  onOpenSession?: (sessionId: string) => void;
 }
 
 export function useAppEnvironmentState(input: UseAppEnvironmentStateInput) {
-  const [showSettings, setShowSettings] = useState(false);
+  const [showSettings, setShowSettings] = useState<SettingsSection | false>(false);
   const [scrollToMessageId, setScrollToMessageId] = useState<string | undefined>();
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
@@ -42,7 +46,10 @@ export function useAppEnvironmentState(input: UseAppEnvironmentStateInput) {
     pendingPermission: input.pendingPermission,
     notificationSettings,
     activeSessionId: input.activeSessionId,
+    activeSession: input.activeSession,
+    sessionInfo: input.sessionInfo,
     isProcessing: input.isProcessing,
+    onOpenSession: input.onOpenSession,
   });
 
   useEffect(() => {

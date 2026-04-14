@@ -117,6 +117,8 @@ export interface ChatSession extends SessionBase {
   isProcessing?: boolean;
   /** A background session has a pending permission request (tool approval, etc.) */
   hasPendingPermission?: boolean;
+  /** A background session finished while inactive and has not been opened yet. */
+  hasUnreadCompletion?: boolean;
   titleGenerating?: boolean;
 }
 
