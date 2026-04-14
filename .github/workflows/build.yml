@@ -118,17 +118,18 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - name: Disable root postinstall for Windows CI
+      - name: Strip mac-only native dependency from Windows CI manifest
         shell: bash
         run: |
-          # electron-builder already rebuilds native deps during packaging.
-          # Skip the repo's dev-focused postinstall hook here because on
-          # Windows it still tries to compile the macOS-only
-          # electron-liquid-glass module and fails the job before packaging.
-          node -e "const fs=require('fs'); const pkg=require('./package.json'); delete pkg.scripts.postinstall; fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');"
+          # electron-builder rebuilds native prod deps during packaging.
+          # On Windows, remove the macOS-only electron-liquid-glass package so
+          # @electron/rebuild never tries to compile Objective-C++ sources.
+          # Also drop the root postinstall because this CI job does not need
+          # the repo's dev-focused rebuild hook.
+          node -e "const fs=require('fs'); const pkg=require('./package.json'); delete pkg.scripts.postinstall; delete pkg.dependencies['electron-liquid-glass']; fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');"
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build app
         run: pnpm build
@@ -179,8 +180,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential python3 libsecret-1-dev libnotify-dev
 
+      - name: Strip mac-only native dependency from Linux CI manifest
+        shell: bash
+        run: |
+          # electron-builder rebuilds native prod deps during packaging.
+          # On Linux, remove the macOS-only electron-liquid-glass package so
+          # @electron/rebuild never tries to compile Objective-C++ sources.
+          # Also drop the root postinstall because this CI job does not need
+          # the repo's dev-focused rebuild hook.
+          node -e "const fs=require('fs'); const pkg=require('./package.json'); delete pkg.scripts.postinstall; delete pkg.dependencies['electron-liquid-glass']; fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');"
+
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build app
         run: pnpm build
