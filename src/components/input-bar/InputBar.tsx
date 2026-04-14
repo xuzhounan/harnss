@@ -43,6 +43,7 @@ import {
   isAcceptedImage,
   insertTextAtCursor,
   hasMeaningfulText,
+  stripVoicePlaceholderText,
   extractEditableContent,
   getAvailableSlashCommands,
   isClearCommandText,
@@ -108,6 +109,8 @@ export interface InputBarProps {
   grabbedElements?: GrabbedElement[];
   /** Remove a grabbed element by ID */
   onRemoveGrabbedElement?: (id: string) => void;
+  /** Open ACP Agents settings */
+  onManageACPs?: () => void;
 }
 
 export const InputBar = memo(function InputBar({
@@ -146,6 +149,7 @@ export const InputBar = memo(function InputBar({
   queuedCount = 0,
   grabbedElements,
   onRemoveGrabbedElement,
+  onManageACPs,
 }: InputBarProps) {
   // ── Core state ──
   const [hasContent, setHasContent] = useState(false);
@@ -558,20 +562,34 @@ export const InputBar = memo(function InputBar({
       const el = editableRef.current;
       if (!el) return;
 
+      const hasMentionChip =
+        el.querySelector("[data-mention-path]") !== null;
+      const rawText = el.textContent ?? "";
+      const sanitizedText = stripVoicePlaceholderText(rawText);
+      if (!hasMentionChip && sanitizedText !== rawText) {
+        el.textContent = sanitizedText;
+        const selection = window.getSelection();
+        if (selection) {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          range.collapse(false);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
+      }
+
       const nativeEvent = e.nativeEvent;
       const inputType =
         nativeEvent instanceof InputEvent ? nativeEvent.inputType : "";
       const shouldRecomputeHasContent =
+        sanitizedText !== rawText ||
         !hasContentRef.current ||
         inputType.startsWith("delete") ||
         inputType === "historyUndo" ||
         inputType === "historyRedo";
 
       if (shouldRecomputeHasContent) {
-        const text = el.textContent ?? "";
-        const hasText = hasMeaningfulText(text);
-        const hasMentionChip =
-          el.querySelector("[data-mention-path]") !== null;
+        const hasText = hasMeaningfulText(sanitizedText);
         const nextHasContent = hasText || hasMentionChip;
         if (nextHasContent !== hasContentRef.current) {
           hasContentRef.current = nextHasContent;
@@ -597,7 +615,7 @@ export const InputBar = memo(function InputBar({
       mention.detectMentionTrigger(node, range.startOffset);
 
       // Slash command detection
-      command.detectCommandTrigger(el.textContent ?? "");
+      command.detectCommandTrigger(sanitizedText);
     },
     [mention, command],
   );
@@ -905,6 +923,7 @@ export const InputBar = memo(function InputBar({
               onACPConfigChange={onACPConfigChange}
               lockedEngine={lockedEngine}
               lockedAgentId={lockedAgentId}
+              onManageACPs={onManageACPs}
             />
 
             <span

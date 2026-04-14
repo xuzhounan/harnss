@@ -44,6 +44,12 @@ import { FolderSection } from "./FolderSection";
 import { BranchSection } from "./BranchSection";
 import { useSidebarActions } from "./SidebarActionsContext";
 import { buildSidebarGroups, type SidebarItem, type PinnedSidebarItem } from "@/lib/sidebar/grouping";
+import {
+  clearSidebarDragPayload,
+  writeSidebarDragPayload,
+} from "@/lib/sidebar/dnd";
+
+type ProjectDropIndicator = "before" | "after" | null;
 
 export function ProjectSection({
   islandLayout,
@@ -62,10 +68,13 @@ export function ProjectSection({
   onImportCCSession,
   otherSpaces,
   onMoveToSpace,
-  onReorderProject,
   defaultChatLimit,
   onCreateFolder,
   onSetOrganizeByChatBranch,
+  onProjectDragStart,
+  onProjectDragEnd,
+  dropIndicator,
+  isDraggingProject,
   agents,
 }: {
   islandLayout: boolean;
@@ -84,10 +93,13 @@ export function ProjectSection({
   onImportCCSession: (ccSessionId: string) => void;
   otherSpaces: Space[];
   onMoveToSpace: (spaceId: string) => void;
-  onReorderProject: (targetProjectId: string) => void;
   defaultChatLimit: number;
   onCreateFolder: () => void;
   onSetOrganizeByChatBranch: (on: boolean) => void;
+  onProjectDragStart: (projectId: string) => void;
+  onProjectDragEnd: () => void;
+  dropIndicator: ProjectDropIndicator;
+  isDraggingProject: boolean;
   agents?: InstalledAgent[];
 }) {
   const {
@@ -112,7 +124,6 @@ export function ProjectSection({
     triggerStyle, containerRef,
   } = useContextMenuPosition();
   const [expanded, setExpanded] = useState(true);
-  const [isDragOver, setIsDragOver] = useState(false);
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const openingIconPickerRef = useRef(false);
   // Pagination: show N items initially, load 20 more on each click
@@ -224,206 +235,208 @@ export function ProjectSection({
   }
 
   return (
-    <div
-      className={`mb-2 rounded-xl transition-all ${isDragOver ? "bg-black/5 ring-1 ring-primary/20 dark:bg-white/5" : ""}`}
-      onDragOver={(e) => {
-        // Accept project drops for reorder
-        if (e.dataTransfer.types.includes("application/x-project-id")) {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "move";
-          setIsDragOver(true);
-        }
-      }}
-      onDragLeave={() => setIsDragOver(false)}
-      onDrop={(e) => {
-        setIsDragOver(false);
-        const draggedId = e.dataTransfer.getData("application/x-project-id");
-        if (draggedId && draggedId !== project.id) {
-          onReorderProject(draggedId);
-        }
-      }}
-    >
-      {/* Project header row */}
+    <div className="relative mb-2 rounded-xl">
+      {dropIndicator === "before" && (
+        <div className="pointer-events-none absolute inset-x-2 -top-1 z-20">
+          <div className="h-0.5 rounded-full bg-primary shadow-[0_0_0_1px_hsl(var(--background))]" />
+        </div>
+      )}
+      {dropIndicator === "after" && (
+        <div className="pointer-events-none absolute inset-x-2 -bottom-1 z-20">
+          <div className="h-0.5 rounded-full bg-primary shadow-[0_0_0_1px_hsl(var(--background))]" />
+        </div>
+      )}
+
       <div
-        ref={containerRef}
-        className="group relative flex items-center"
-        draggable
-        onDragStart={(e) => {
-          e.dataTransfer.setData("application/x-project-id", project.id);
-          e.dataTransfer.effectAllowed = "move";
-        }}
-        onContextMenu={handleContextMenu}
+        className={`rounded-xl transition-opacity ${isDraggingProject ? "opacity-60" : ""}`}
       >
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="flex w-full min-w-0 items-center gap-1.5 rounded-lg px-2.5 group-hover:pe-20 py-2 text-start text-[13px] font-semibold text-sidebar-foreground/90 transition-all hover:bg-black/5 dark:hover:bg-white/10"
+        {/* Project header row */}
+        <div
+          ref={containerRef}
+          className="group relative flex cursor-grab items-center active:cursor-grabbing"
+          data-project-drop-anchor-id={project.id}
+          draggable
+          onDragStart={(e) => {
+            writeSidebarDragPayload(e.dataTransfer, { kind: "project", id: project.id });
+            e.dataTransfer.effectAllowed = "move";
+            onProjectDragStart(project.id);
+          }}
+          onDragEnd={() => {
+            clearSidebarDragPayload();
+            onProjectDragEnd();
+          }}
+          onContextMenu={handleContextMenu}
         >
-          <ChevronRight
-            className={`h-4 w-4 shrink-0 text-sidebar-foreground/50 transition-transform ${
-              expanded ? "rotate-90" : ""
-            }`}
-          />
-          {project.icon && project.iconType === "emoji" ? (
-            <span className="h-4 w-4 shrink-0 text-center text-sm leading-4">{project.icon}</span>
-          ) : project.icon && project.iconType === "lucide" ? (
-            (() => {
-              const Icon = resolveLucideIcon(project.icon);
-              return Icon ? (
-                <Icon className="h-4 w-4 shrink-0 text-sidebar-foreground/60" />
-              ) : (
-                <FolderOpen className="h-4 w-4 shrink-0 text-sidebar-foreground/60" />
-              );
-            })()
-          ) : (
-            <FolderOpen className="h-4 w-4 shrink-0 text-sidebar-foreground/60" />
-          )}
-          <span className="min-w-0 truncate">{project.name}</span>
-        </button>
-
-        <div className="absolute end-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-          {jiraBoardEnabled && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className={`h-7 w-7 shrink-0 rounded-lg transition-all ${
-                isJiraBoardOpen
-                  ? "bg-black/10 text-sidebar-foreground dark:bg-white/15"
-                  : "text-sidebar-foreground/50 hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
-              }`}
-              onClick={onToggleJiraBoard}
-              title="Open Jira board"
-            >
-              <KanbanSquare className="h-4 w-4" />
-            </Button>
-          )}
-
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0 rounded-lg text-sidebar-foreground/50 transition-all hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
-            onClick={onNewChat}
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="flex w-full min-w-0 items-center gap-1.5 rounded-lg px-2.5 py-2 text-start text-[13px] font-semibold text-sidebar-foreground/90 transition-all group-hover:pe-20 hover:bg-black/5 dark:hover:bg-white/10"
           >
-            <SquarePen className="h-4 w-4" />
-          </Button>
+            <ChevronRight
+              className={`h-4 w-4 shrink-0 text-sidebar-foreground/50 transition-transform ${
+                expanded ? "rotate-90" : ""
+              }`}
+            />
+            {project.icon && project.iconType === "emoji" ? (
+              <span className="h-4 w-4 shrink-0 text-center text-sm leading-4">{project.icon}</span>
+            ) : project.icon && project.iconType === "lucide" ? (
+              (() => {
+                const Icon = resolveLucideIcon(project.icon);
+                return Icon ? (
+                  <Icon className="h-4 w-4 shrink-0 text-sidebar-foreground/60" />
+                ) : (
+                  <FolderOpen className="h-4 w-4 shrink-0 text-sidebar-foreground/60" />
+                );
+              })()
+            ) : (
+              <FolderOpen className="h-4 w-4 shrink-0 text-sidebar-foreground/60" />
+            )}
+            <span className="min-w-0 truncate">{project.name}</span>
+          </button>
 
-          <Popover open={iconPickerOpen} onOpenChange={setIconPickerOpen}>
-            <PopoverAnchor asChild>
+          <div className="absolute end-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+            {jiraBoardEnabled && (
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-7 w-7 shrink-0 rounded-lg text-sidebar-foreground/50 transition-all hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
-                onClick={handleMenuButtonClick}
+                className={`h-7 w-7 shrink-0 rounded-lg transition-all ${
+                  isJiraBoardOpen
+                    ? "bg-black/10 text-sidebar-foreground dark:bg-white/15"
+                    : "text-sidebar-foreground/50 hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
+                }`}
+                onClick={onToggleJiraBoard}
+                title="Open Jira board"
               >
-                <MoreHorizontal className="h-4 w-4" />
+                <KanbanSquare className="h-4 w-4" />
               </Button>
-            </PopoverAnchor>
-
-          {/* Icon picker popover — anchored to the ... button, triggered from dropdown "Set icon" */}
-          <PopoverContent align="start" side="right" className="w-72 p-3">
-            <IconPicker
-              value={project.icon ?? ""}
-              iconType={project.iconType ?? "emoji"}
-              onChange={(icon, type) => {
-                onUpdateIcon(icon, type);
-                setIconPickerOpen(false);
-              }}
-            />
-          </PopoverContent>
-        </Popover>
-        </div>
-
-        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-          <DropdownMenuTrigger asChild>
-            <span style={triggerStyle} />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align={menuAlign}
-            side="bottom"
-            sideOffset={6}
-            className="w-48"
-            onCloseAutoFocus={(e) => {
-              if (!openingIconPickerRef.current) return;
-              e.preventDefault();
-              openingIconPickerRef.current = false;
-            }}
-          >
-            <DropdownMenuItem onClick={onCreateFolder}>
-              <FolderPlus className="me-2 h-3.5 w-3.5" />
-              New folder
-            </DropdownMenuItem>
-            <DropdownMenuCheckboxItem
-              checked={organizeByChatBranch}
-              onCheckedChange={onSetOrganizeByChatBranch}
-            >
-              <GitBranch className="me-2 h-3.5 w-3.5" />
-              Organize by branch
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={startEditing}>
-              <Pencil className="me-2 h-3.5 w-3.5" />
-              Rename
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={(e) => {
-                e.preventDefault();
-                openingIconPickerRef.current = true;
-                setMenuOpen(false);
-                requestAnimationFrame(() => setIconPickerOpen(true));
-              }}
-            >
-              <Smile className="me-2 h-3.5 w-3.5" />
-              Set icon
-            </DropdownMenuItem>
-            {project.icon && (
-              <DropdownMenuItem onClick={() => onUpdateIcon(null, null)}>
-                <X className="me-2 h-3.5 w-3.5" />
-                Remove icon
-              </DropdownMenuItem>
             )}
-            <DropdownMenuSeparator />
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <History className="me-2 h-3.5 w-3.5" />
-                Resume CC Chat
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="max-h-80 w-72 overflow-y-auto">
-                <CCSessionList projectPath={project.path} onSelect={onImportCCSession} />
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            {otherSpaces.length > 0 && (
+
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0 rounded-lg text-sidebar-foreground/50 transition-all hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
+              onClick={onNewChat}
+            >
+              <SquarePen className="h-4 w-4" />
+            </Button>
+
+            <Popover open={iconPickerOpen} onOpenChange={setIconPickerOpen}>
+              <PopoverAnchor asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0 rounded-lg text-sidebar-foreground/50 transition-all hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
+                  onClick={handleMenuButtonClick}
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </PopoverAnchor>
+
+              {/* Icon picker popover — anchored to the ... button, triggered from dropdown "Set icon" */}
+              <PopoverContent align="start" side="right" className="w-72 p-3">
+                <IconPicker
+                  value={project.icon ?? ""}
+                  iconType={project.iconType ?? "emoji"}
+                  onChange={(icon, type) => {
+                    onUpdateIcon(icon, type);
+                    setIconPickerOpen(false);
+                  }}
+                />
+              </PopoverContent>
+            </Popover>
+          </div>
+
+          <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+            <DropdownMenuTrigger asChild>
+              <span style={triggerStyle} />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align={menuAlign}
+              side="bottom"
+              sideOffset={6}
+              className="w-48"
+              onCloseAutoFocus={(e) => {
+                if (!openingIconPickerRef.current) return;
+                e.preventDefault();
+                openingIconPickerRef.current = false;
+              }}
+            >
+              <DropdownMenuItem onClick={onCreateFolder}>
+                <FolderPlus className="me-2 h-3.5 w-3.5" />
+                New folder
+              </DropdownMenuItem>
+              <DropdownMenuCheckboxItem
+                checked={organizeByChatBranch}
+                onCheckedChange={onSetOrganizeByChatBranch}
+              >
+                <GitBranch className="me-2 h-3.5 w-3.5" />
+                Organize by branch
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={startEditing}>
+                <Pencil className="me-2 h-3.5 w-3.5" />
+                Rename
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  openingIconPickerRef.current = true;
+                  setMenuOpen(false);
+                  requestAnimationFrame(() => setIconPickerOpen(true));
+                }}
+              >
+                <Smile className="me-2 h-3.5 w-3.5" />
+                Set icon
+              </DropdownMenuItem>
+              {project.icon && (
+                <DropdownMenuItem onClick={() => onUpdateIcon(null, null)}>
+                  <X className="me-2 h-3.5 w-3.5" />
+                  Remove icon
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>
-                  <ArrowRightLeft className="me-2 h-3.5 w-3.5" />
-                  Move to space
+                  <History className="me-2 h-3.5 w-3.5" />
+                  Resume CC Chat
                 </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent className="w-44">
-                  {otherSpaces.map((s) => {
-                    const SpIcon = s.iconType === "lucide" ? resolveLucideIcon(s.icon) : null;
-                    return (
-                      <DropdownMenuItem key={s.id} onClick={() => onMoveToSpace(s.id)}>
-                        {s.iconType === "emoji" ? (
-                          <span className="me-2 text-sm">{s.icon}</span>
-                        ) : SpIcon ? (
-                          <SpIcon className="me-2 h-3.5 w-3.5" />
-                        ) : null}
-                        {s.name}
-                      </DropdownMenuItem>
-                    );
-                  })}
+                <DropdownMenuSubContent className="max-h-80 w-72 overflow-y-auto">
+                  <CCSessionList projectPath={project.path} onSelect={onImportCCSession} />
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
-            )}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className="text-destructive focus:text-destructive"
-              onClick={onDeleteProject}
-            >
-              <Trash2 className="me-2 h-3.5 w-3.5" />
-              Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+              {otherSpaces.length > 0 && (
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <ArrowRightLeft className="me-2 h-3.5 w-3.5" />
+                    Move to space
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className="w-44">
+                    {otherSpaces.map((s) => {
+                      const SpIcon = s.iconType === "lucide" ? resolveLucideIcon(s.icon) : null;
+                      return (
+                        <DropdownMenuItem key={s.id} onClick={() => onMoveToSpace(s.id)}>
+                          {s.iconType === "emoji" ? (
+                            <span className="me-2 text-sm">{s.icon}</span>
+                          ) : SpIcon ? (
+                            <SpIcon className="me-2 h-3.5 w-3.5" />
+                          ) : null}
+                          {s.name}
+                        </DropdownMenuItem>
+                      );
+                    })}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-destructive focus:text-destructive"
+                onClick={onDeleteProject}
+              >
+                <Trash2 className="me-2 h-3.5 w-3.5" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
 
       {/* Nested chats */}
       {expanded && (
@@ -466,6 +479,7 @@ export function ProjectSection({
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }

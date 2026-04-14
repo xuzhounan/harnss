@@ -137,6 +137,9 @@ export interface SplitTopRowItemProps {
     stopAgent: (id: string, taskId: string) => void;
   };
 
+  // Navigation
+  onManageACPs?: () => void;
+
   // Layout metrics
   getPreviewPaneMetrics: (previewIndex: number) => { widthPercent: number; handleSharePx: number };
 }
@@ -522,6 +525,7 @@ function SplitTopRowItemInner(props: SplitTopRowItemProps) {
           targetColumnId: null,
         });
       },
+      onManageACPs: props.onManageACPs,
       onToolDragEnd: resetSplitToolDrag,
       onChatPaneDragOver: splitToolDrag ? (event: React.DragEvent<HTMLDivElement>) => {
         event.preventDefault();

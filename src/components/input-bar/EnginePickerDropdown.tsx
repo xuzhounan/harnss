@@ -1,10 +1,12 @@
 import { memo } from "react";
-import { ChevronDown, Loader2 } from "lucide-react";
+import { ChevronDown, Loader2, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -69,6 +71,8 @@ export interface EnginePickerDropdownProps {
   // Session locking
   lockedEngine?: EngineId | null;
   lockedAgentId?: string | null;
+  // Navigation
+  onManageACPs?: () => void;
 }
 
 /** Engine/model/effort/agent picker dropdown in the input bar toolbar. */
@@ -97,6 +101,7 @@ export const EnginePickerDropdown = memo(function EnginePickerDropdown({
   onACPConfigChange,
   lockedEngine,
   lockedAgentId,
+  onManageACPs,
 }: EnginePickerDropdownProps) {
   // Engine-specific config items (model/effort/ACP config) -- shared between
   // multi-agent submenu and single-agent direct rendering
@@ -322,11 +327,6 @@ export const EnginePickerDropdown = memo(function EnginePickerDropdown({
         <div>
           <div className="flex items-center gap-1.5">
             {agent.name}
-            {agent.engine !== "claude" && (
-              <span className="rounded bg-amber-500/15 px-1 py-px text-[10px] font-medium text-amber-400">
-                Beta
-              </span>
-            )}
           </div>
           {isCrossEngine && (
             <div className="text-[10px] text-muted-foreground/70">
@@ -362,11 +362,12 @@ export const EnginePickerDropdown = memo(function EnginePickerDropdown({
     );
   };
 
-  const sameEngine = hasMultipleAgents
-    ? agents.filter((a) => !willOpenNewChat(a))
+  // Split agents into first-party engines (claude, codex) vs ACP agents
+  const firstPartyAgents = hasMultipleAgents
+    ? agents.filter((a) => a.engine === "claude" || a.engine === "codex")
     : [];
-  const crossEngine = hasMultipleAgents
-    ? agents.filter((a) => willOpenNewChat(a))
+  const acpAgents = hasMultipleAgents
+    ? agents.filter((a) => a.engine === "acp")
     : [];
 
   return (
@@ -384,14 +385,37 @@ export const EnginePickerDropdown = memo(function EnginePickerDropdown({
       <DropdownMenuContent align="start" className="w-64">
         {hasMultipleAgents ? (
           <>
-            {sameEngine.map((a) => renderAgent(a, false))}
-            {crossEngine.length > 0 && sameEngine.length > 0 && (
-              <DropdownMenuSeparator />
+            {firstPartyAgents.length > 0 && (
+              <DropdownMenuGroup>
+                <DropdownMenuLabel className="text-[10px] font-medium text-muted-foreground">
+                  Engines
+                </DropdownMenuLabel>
+                {firstPartyAgents.map((a) => renderAgent(a, willOpenNewChat(a)))}
+              </DropdownMenuGroup>
             )}
-            {crossEngine.map((a) => renderAgent(a, true))}
+            {acpAgents.length > 0 && (
+              <>
+                {firstPartyAgents.length > 0 && <DropdownMenuSeparator />}
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel className="text-[10px] font-medium text-muted-foreground">
+                    ACP Agents
+                  </DropdownMenuLabel>
+                  {acpAgents.map((a) => renderAgent(a, willOpenNewChat(a)))}
+                </DropdownMenuGroup>
+              </>
+            )}
           </>
         ) : (
           configItems
+        )}
+        {onManageACPs && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={onManageACPs}>
+              <Settings className="h-3.5 w-3.5 text-muted-foreground" />
+              Manage ACPs
+            </DropdownMenuItem>
+          </>
         )}
       </DropdownMenuContent>
     </DropdownMenu>

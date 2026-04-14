@@ -1059,7 +1059,7 @@ export function AppLayout() {
           onStartCreateSpace: handleStartCreateSpace,
           onUpdateSpace: handleUpdateSpace,
           onDeleteSpace: handleDeleteSpace,
-          onOpenSettings: () => setShowSettings(true),
+          onOpenSettings: () => setShowSettings("general"),
           onConfirmCreateSpace: handleConfirmCreateSpace,
           onCancelCreateSpace: handleCancelCreateSpace,
         }}
@@ -1088,6 +1088,7 @@ export function AppLayout() {
             sidebarOpen={sidebar.isOpen}
             onToggleSidebar={sidebar.toggle}
             onReplayWelcome={handleReplayWelcome}
+            initialSection={showSettings}
           />
         )}
         {/* Keep chat area mounted (hidden) when settings is open to avoid
@@ -1271,6 +1272,7 @@ export function AppLayout() {
                             activeTodos={activeTodos}
                             bgAgents={bgAgents}
                             getPreviewPaneMetrics={getPreviewPaneMetrics}
+                            onManageACPs={() => setShowSettings("agents")}
                           />
                         )}
 
@@ -1554,6 +1556,7 @@ export function AppLayout() {
                   selectedWorktreePath={activeSpaceTerminalCwd}
                   onSelectWorktree={handleAgentWorktreeChange}
                   isEmptySession={manager.messages.length === 0}
+                  onManageACPs={() => setShowSettings("agents")}
                 />
               </div>
               </>

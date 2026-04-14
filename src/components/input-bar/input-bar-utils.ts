@@ -2,6 +2,8 @@ import type { SlashCommand } from "@/types";
 import type { AcceptedMediaType } from "./constants";
 import { ACCEPTED_IMAGE_TYPES } from "./constants";
 
+const BLANK_AUDIO_PLACEHOLDER_RE = /\[BLANK_AUDIO\]/gi;
+
 /** Read a file as base64 data with its media type. */
 export function readFileAsBase64(
   file: globalThis.File,
@@ -53,8 +55,9 @@ export function insertTextAtCursor(
 
 /** Fast non-whitespace check that short-circuits early for typical prompts. */
 export function hasMeaningfulText(text: string): boolean {
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i);
+  const sanitized = stripVoicePlaceholderText(text);
+  for (let i = 0; i < sanitized.length; i++) {
+    const code = sanitized.charCodeAt(i);
     if (
       code !== 32 && // space
       code !== 9 && // tab
@@ -68,6 +71,11 @@ export function hasMeaningfulText(text: string): boolean {
     }
   }
   return false;
+}
+
+/** Remove placeholder text inserted by native dictation when no speech was captured. */
+export function stripVoicePlaceholderText(text: string): string {
+  return text.replace(BLANK_AUDIO_PLACEHOLDER_RE, "");
 }
 
 /** Extract full text + mention paths from a contentEditable element. */
@@ -119,7 +127,9 @@ export function extractEditableContent(el: HTMLElement): {
 
   for (const child of el.childNodes) walk(child);
   return {
-    text: text.replace(/\r\n/g, "\n").replace(/\u00a0/g, " "),
+    text: stripVoicePlaceholderText(
+      text.replace(/\r\n/g, "\n").replace(/\u00a0/g, " "),
+    ),
     mentionPaths: [...new Set(mentionPaths)],
     deepMentionPaths,
   };
@@ -224,5 +234,6 @@ if (import.meta.vitest) {
       expect(result.mentionPaths).toEqual(["space/123"]);
       expect(result.deepMentionPaths.has("space/123")).toBe(true);
     });
+
   });
 }

@@ -32,7 +32,7 @@ import { useAgentContext } from "./AgentContext";
 
 // ── Section definitions ──
 
-type SettingsSection = "general" | "appearance" | "notifications" | "analytics" | "agents" | "mcp" | "engines" | "skills" | "custom-agents" | "advanced" | "about";
+export type SettingsSection = "general" | "appearance" | "notifications" | "analytics" | "agents" | "mcp" | "engines" | "skills" | "custom-agents" | "advanced" | "about";
 
 interface NavItem {
   id: SettingsSection;
@@ -66,6 +66,8 @@ interface SettingsViewProps {
   onToggleSidebar?: () => void;
   /** Resets the welcome wizard so it shows again. Dev-only. */
   onReplayWelcome: () => void;
+  /** Open directly to a specific section (e.g. "agents" from the engine picker). */
+  initialSection?: SettingsSection;
 }
 
 // ── Component ──
@@ -77,10 +79,11 @@ export const SettingsView = memo(function SettingsView({
   sidebarOpen = false,
   onToggleSidebar,
   onReplayWelcome,
+  initialSection,
 }: SettingsViewProps) {
   const { agents, saveAgent, deleteAgent } = useAgentContext();
   const islandLayout = useSettingsStore((s) => s.islandLayout);
-  const [activeSection, setActiveSection] = useState<SettingsSection>("general");
+  const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection ?? "general");
   const macIslandTitlebarOffsetClass = "";
 
   // ── Main-process app settings (loaded once, updated optimistically) ──

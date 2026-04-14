@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback, memo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, memo, type DragEvent } from "react";
 import { Bug, PanelLeft, Plus, Paintbrush } from "lucide-react";
 import { isMac } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,67 @@ import { PreReleaseBanner } from "./PreReleaseBanner";
 import { ProjectSection } from "./sidebar/ProjectSection";
 import { SidebarActionsProvider } from "./sidebar/SidebarActionsContext";
 import { useAgentContext } from "./AgentContext";
+import { clearSidebarDragPayload, isSidebarDragKind } from "@/lib/sidebar/dnd";
+
+type ProjectDropPlacement = "before" | "after";
+
+interface ProjectDropTarget {
+  placement: ProjectDropPlacement;
+  targetProjectId: string;
+}
+
+const PROJECT_AUTO_SCROLL_EDGE_PX = 56;
+const PROJECT_AUTO_SCROLL_MAX_STEP = 22;
+
+function getScrollViewport(scrollRoot: HTMLDivElement | null): HTMLElement | null {
+  return scrollRoot?.querySelector<HTMLElement>("[data-radix-scroll-area-viewport]") ?? null;
+}
+
+function getProjectDropTarget(
+  projectListRoot: HTMLDivElement | null,
+  pointerY: number,
+  draggedProjectId: string,
+): ProjectDropTarget | null {
+  if (!projectListRoot) return null;
+
+  const anchors = Array.from(
+    projectListRoot.querySelectorAll<HTMLElement>("[data-project-drop-anchor-id]"),
+  );
+
+  let fallback: ProjectDropTarget | null = null;
+  for (const anchor of anchors) {
+    const targetProjectId = anchor.dataset.projectDropAnchorId;
+    if (!targetProjectId || targetProjectId === draggedProjectId) continue;
+
+    const rect = anchor.getBoundingClientRect();
+    const midpoint = rect.top + rect.height / 2;
+    if (pointerY < midpoint) {
+      return { placement: "before", targetProjectId };
+    }
+
+    fallback = { placement: "after", targetProjectId };
+  }
+
+  return fallback;
+}
+
+function resolveProjectReorderTarget(
+  orderedProjects: Project[],
+  draggedProjectId: string,
+  dropTarget: ProjectDropTarget,
+): string | null {
+  const fromIdx = orderedProjects.findIndex((project) => project.id === draggedProjectId);
+  const targetIdx = orderedProjects.findIndex((project) => project.id === dropTarget.targetProjectId);
+  if (fromIdx === -1 || targetIdx === -1) return null;
+
+  if (dropTarget.placement === "before") {
+    if (fromIdx > targetIdx) return dropTarget.targetProjectId;
+    return orderedProjects[targetIdx - 1]?.id ?? null;
+  }
+
+  if (fromIdx < targetIdx) return dropTarget.targetProjectId;
+  return orderedProjects[targetIdx + 1]?.id ?? null;
+}
 
 interface AppSidebarState {
   isOpen: boolean;
@@ -252,13 +313,17 @@ export const AppSidebar = memo(function AppSidebar({
 
   // Scroll fade
   const scrollRef = useRef<HTMLDivElement>(null);
+  const projectListRef = useRef<HTMLDivElement>(null);
+  const draggedProjectIdRef = useRef<string | null>(null);
+  const dragPointerYRef = useRef<number | null>(null);
+  const autoScrollFrameRef = useRef<number | null>(null);
   const [fadeTop, setFadeTop] = useState(false);
   const [fadeBottom, setFadeBottom] = useState(false);
+  const [draggedProjectId, setDraggedProjectId] = useState<string | null>(null);
+  const [projectDropTarget, setProjectDropTarget] = useState<ProjectDropTarget | null>(null);
 
   const updateFade = useCallback(() => {
-    const viewport = scrollRef.current?.querySelector<HTMLElement>(
-      "[data-radix-scroll-area-viewport]",
-    );
+    const viewport = getScrollViewport(scrollRef.current);
     if (!viewport) return;
     const { scrollTop, scrollHeight, clientHeight } = viewport;
     setFadeTop(scrollTop > 4);
@@ -266,9 +331,7 @@ export const AppSidebar = memo(function AppSidebar({
   }, []);
 
   useEffect(() => {
-    const viewport = scrollRef.current?.querySelector<HTMLElement>(
-      "[data-radix-scroll-area-viewport]",
-    );
+    const viewport = getScrollViewport(scrollRef.current);
     if (!viewport) return;
     viewport.addEventListener("scroll", updateFade, { passive: true });
 
@@ -305,6 +368,120 @@ export const AppSidebar = memo(function AppSidebar({
     },
     [draftSpaceId, onUpdateSpace],
   );
+
+  const clearProjectDragState = useCallback(() => {
+    draggedProjectIdRef.current = null;
+    dragPointerYRef.current = null;
+    setDraggedProjectId(null);
+    setProjectDropTarget(null);
+
+    if (autoScrollFrameRef.current !== null) {
+      cancelAnimationFrame(autoScrollFrameRef.current);
+      autoScrollFrameRef.current = null;
+    }
+  }, []);
+
+  const updateProjectDropPreview = useCallback(
+    (pointerY: number, draggedId: string) => {
+      setProjectDropTarget(getProjectDropTarget(projectListRef.current, pointerY, draggedId));
+    },
+    [],
+  );
+
+  const tickProjectAutoScroll = useCallback(() => {
+    autoScrollFrameRef.current = null;
+
+    const pointerY = dragPointerYRef.current;
+    const draggedId = draggedProjectIdRef.current;
+    const viewport = getScrollViewport(scrollRef.current);
+    if (pointerY === null || !draggedId || !viewport) return;
+
+    const rect = viewport.getBoundingClientRect();
+    let delta = 0;
+
+    if (pointerY < rect.top + PROJECT_AUTO_SCROLL_EDGE_PX) {
+      const intensity = (rect.top + PROJECT_AUTO_SCROLL_EDGE_PX - pointerY) / PROJECT_AUTO_SCROLL_EDGE_PX;
+      delta = -Math.ceil(PROJECT_AUTO_SCROLL_MAX_STEP * Math.min(intensity, 1));
+    } else if (pointerY > rect.bottom - PROJECT_AUTO_SCROLL_EDGE_PX) {
+      const intensity = (pointerY - (rect.bottom - PROJECT_AUTO_SCROLL_EDGE_PX)) / PROJECT_AUTO_SCROLL_EDGE_PX;
+      delta = Math.ceil(PROJECT_AUTO_SCROLL_MAX_STEP * Math.min(intensity, 1));
+    }
+
+    if (delta !== 0) {
+      const nextScrollTop = Math.max(
+        0,
+        Math.min(viewport.scrollTop + delta, viewport.scrollHeight - viewport.clientHeight),
+      );
+      if (nextScrollTop !== viewport.scrollTop) {
+        viewport.scrollTop = nextScrollTop;
+        updateProjectDropPreview(pointerY, draggedId);
+      }
+    }
+
+    if (draggedProjectIdRef.current) {
+      autoScrollFrameRef.current = requestAnimationFrame(tickProjectAutoScroll);
+    }
+  }, [updateProjectDropPreview]);
+
+  const ensureProjectAutoScroll = useCallback(() => {
+    if (autoScrollFrameRef.current !== null) return;
+    autoScrollFrameRef.current = requestAnimationFrame(tickProjectAutoScroll);
+  }, [tickProjectAutoScroll]);
+
+  const handleProjectDragStart = useCallback((projectId: string) => {
+    draggedProjectIdRef.current = projectId;
+    dragPointerYRef.current = null;
+    setDraggedProjectId(projectId);
+    setProjectDropTarget(null);
+    ensureProjectAutoScroll();
+  }, [ensureProjectAutoScroll]);
+
+  const handleProjectDragEnd = useCallback(() => {
+    clearSidebarDragPayload();
+    clearProjectDragState();
+  }, [clearProjectDragState]);
+
+  const handleProjectListDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
+    if (!isSidebarDragKind("project", e.dataTransfer)) return;
+
+    const draggedId = draggedProjectIdRef.current;
+    if (!draggedId) return;
+
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    dragPointerYRef.current = e.clientY;
+    updateProjectDropPreview(e.clientY, draggedId);
+    ensureProjectAutoScroll();
+  }, [ensureProjectAutoScroll, updateProjectDropPreview]);
+
+  const handleProjectListDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
+    if (!isSidebarDragKind("project", e.dataTransfer)) return;
+
+    e.preventDefault();
+
+    const draggedId = draggedProjectIdRef.current;
+    const dropTarget = projectDropTarget ?? (
+      dragPointerYRef.current !== null && draggedId
+        ? getProjectDropTarget(projectListRef.current, dragPointerYRef.current, draggedId)
+        : null
+    );
+
+    if (draggedId && dropTarget) {
+      const reorderTargetId = resolveProjectReorderTarget(filteredProjects, draggedId, dropTarget);
+      if (reorderTargetId && reorderTargetId !== draggedId) {
+        onReorderProject(draggedId, reorderTargetId);
+      }
+    }
+
+    clearSidebarDragPayload();
+    clearProjectDragState();
+  }, [clearProjectDragState, filteredProjects, onReorderProject, projectDropTarget]);
+
+  useEffect(() => () => {
+    if (autoScrollFrameRef.current !== null) {
+      cancelAnimationFrame(autoScrollFrameRef.current);
+    }
+  }, []);
 
   return (
     <div
@@ -420,7 +597,11 @@ export const AppSidebar = memo(function AppSidebar({
       ) : (
         /* ── Normal sidebar content ── */
         <SidebarActionsProvider value={sidebarActions}>
-        <div className={`flex min-h-0 flex-1 flex-col ${draftSlideClass}`}>
+        <div
+          className={`flex min-h-0 flex-1 flex-col ${draftSlideClass}`}
+          onDragOver={handleProjectListDragOver}
+          onDrop={handleProjectListDrop}
+        >
           <SidebarSearch
             projectIds={projectIds}
             onNavigateToMessage={onNavigateToMessage}
@@ -432,7 +613,7 @@ export const AppSidebar = memo(function AppSidebar({
             style={{ maskImage: maskValue, WebkitMaskImage: maskValue }}
           >
             <ScrollArea ref={scrollRef} className="h-full">
-              <div className={`px-3 pt-2 pb-8 ${slideClass}`}>
+              <div ref={projectListRef} className={`px-3 pt-2 pb-8 ${slideClass}`}>
                 {filteredProjects.map((project) => {
                   const projectSessions = sessionsByProject.get(project.id) ?? [];
                   const projectFolders = foldersByProject[project.id] ?? [];
@@ -462,12 +643,17 @@ export const AppSidebar = memo(function AppSidebar({
                       onMoveToSpace={(spaceId) =>
                         onMoveProjectToSpace(project.id, spaceId)
                       }
-                      onReorderProject={(targetId) =>
-                        onReorderProject(project.id, targetId)
-                      }
                       defaultChatLimit={defaultChatLimit}
                       onCreateFolder={() => onCreateFolder(project.id)}
                       onSetOrganizeByChatBranch={onSetOrganizeByChatBranch}
+                      onProjectDragStart={handleProjectDragStart}
+                      onProjectDragEnd={handleProjectDragEnd}
+                      dropIndicator={
+                        projectDropTarget?.targetProjectId === project.id
+                          ? projectDropTarget.placement
+                          : null
+                      }
+                      isDraggingProject={draggedProjectId === project.id}
                       agents={agents}
                     />
                   );

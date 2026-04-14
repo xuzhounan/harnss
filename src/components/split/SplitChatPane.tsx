@@ -110,6 +110,9 @@ export interface SplitChatPaneProps {
   onToolDragStart: (event: React.DragEvent<HTMLButtonElement>, toolId: ToolId) => void;
   onToolDragEnd: () => void;
 
+  // Navigation
+  onManageACPs?: () => void;
+
   // Chat pane drag
   onChatPaneDragOver?: (event: React.DragEvent<HTMLDivElement>) => void;
   onChatPaneDrop?: (event: React.DragEvent<HTMLDivElement>) => void;
@@ -164,6 +167,7 @@ function SplitChatPaneInner({
   activeContextualTool,
   activeTodos,
   bgAgents,
+  onManageACPs,
   onToolDragStart,
   onToolDragEnd,
   onChatPaneDragOver,
@@ -298,6 +302,7 @@ function SplitChatPaneInner({
               selectedWorktreePath={selectedWorktreePath}
               onSelectWorktree={isActiveSessionPane ? onSelectWorktree : undefined}
               isEmptySession={paneState.messages.length === 0}
+              onManageACPs={onManageACPs}
             />
           </div>
         </div>
