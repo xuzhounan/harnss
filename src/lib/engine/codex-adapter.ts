@@ -281,6 +281,9 @@ function describeWebSearchAction(payload: CodexWebSearchToolPayload): string {
 export function permissionModeToCodexPolicy(mode: string): string | undefined {
   switch (mode) {
     case "default":
+    case "auto":
+      // Codex has no model-classifier mode. Fall back to standard prompt-on-
+      // request so the user gets a safe default if they switch engines mid-chat.
       return "on-request";
     case "acceptEdits":
       return "untrusted";
@@ -301,6 +304,7 @@ export function permissionModeToCodexSandbox(mode: string): "workspace-write" | 
   switch (mode) {
     case "default":
     case "acceptEdits":
+    case "auto":
       return "workspace-write";
     case "bypassPermissions":
       return "danger-full-access";

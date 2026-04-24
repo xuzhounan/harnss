@@ -37,14 +37,25 @@ export const ACP_PERMISSION_BEHAVIORS = [
   description: string;
 }>;
 
+/**
+ * Permission modes exposed in the input-bar dropdown.
+ *
+ * `auto` uses a model classifier to approve/deny each permission prompt based
+ * on risk. This is a Claude Agent SDK feature (`PermissionMode = 'auto'` in
+ * `@anthropic-ai/claude-agent-sdk`). Codex has no equivalent — it's filtered
+ * out of the dropdown when the active engine is Codex.
+ */
 export const PERMISSION_MODES = [
-  { id: "default", label: "Ask Before Edits" },
-  { id: "acceptEdits", label: "Accept Edits" },
-  { id: "bypassPermissions", label: "Allow All" },
+  { id: "default", label: "Ask Before Edits", claudeOnly: false },
+  { id: "acceptEdits", label: "Accept Edits", claudeOnly: false },
+  { id: "auto", label: "Auto (AI-judged)", claudeOnly: true },
+  { id: "bypassPermissions", label: "Allow All", claudeOnly: false },
 ] as const;
 
+export type PermissionModeId = (typeof PERMISSION_MODES)[number]["id"];
+
 export const CODEX_PERMISSION_MODE_DETAILS: Record<
-  (typeof PERMISSION_MODES)[number]["id"],
+  Exclude<PermissionModeId, "auto">,
   { policy: string; description: string }
 > = {
   default: {

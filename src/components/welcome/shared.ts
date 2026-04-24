@@ -67,6 +67,13 @@ export const PERMISSION_MODES = [
     icon: "ShieldCheck" as const,
   },
   {
+    id: "auto",
+    label: "Auto (AI-judged)",
+    description:
+      "A model classifier approves or denies each prompt based on the action's risk level. Claude engine only.",
+    icon: "Sparkles" as const,
+  },
+  {
     id: "bypassPermissions",
     label: "Allow All",
     description:
