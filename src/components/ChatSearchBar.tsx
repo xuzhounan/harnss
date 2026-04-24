@@ -85,6 +85,9 @@ export const ChatSearchBar = memo(function ChatSearchBar({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // IME composition guard — Enter during pinyin/kana input must commit
+      // the candidate, not trigger search navigation.
+      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
       if (e.key === "Escape") {
         e.preventDefault();
         onClose();
