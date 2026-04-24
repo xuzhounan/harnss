@@ -304,6 +304,12 @@ export function register(): void {
     try {
       const trimmed = sessionId.trim();
       if (!trimmed) return { error: "Empty session id" };
+      // Path-traversal guard: CC session ids are UUID v4. Reject anything
+      // that doesn't match the canonical shape so we never construct a
+      // `path.join(root, dir, "../something.jsonl")` from user input.
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
+        return { error: "Not a valid Claude Code session id (expected UUID)" };
+      }
 
       const root = path.join(os.homedir(), ".claude", "projects");
       if (!fs.existsSync(root)) return { found: false };
@@ -320,8 +326,12 @@ export function register(): void {
           found: true,
           ccSessionId: trimmed,
           cwd,
-          // Fall back to dir-name reversal only when JSONL lacked cwd
+          // Fallback is LOSSY: reversing "/" ↔ "-" collapses any real "-" in
+          // the path. We return it only when the JSONL has no cwd field, and
+          // flag it so the UI can warn the user that the auto-resolved path
+          // may be wrong.
           cwdFallbackFromDirName: cwd ? undefined : entry.name.replace(/-/g, "/"),
+          cwdIsApproximate: !cwd,
           preview: preview?.firstUserMessage ?? null,
           model: preview?.model ?? null,
           timestamp: preview?.timestamp ?? null,

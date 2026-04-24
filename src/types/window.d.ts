@@ -214,6 +214,7 @@ declare global {
               ccSessionId: string;
               cwd: string | null;
               cwdFallbackFromDirName?: string;
+              cwdIsApproximate?: boolean;
               preview: string | null;
               model: string | null;
               timestamp: string | null;

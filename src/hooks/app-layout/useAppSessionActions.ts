@@ -189,24 +189,35 @@ export function useAppSessionActions(input: UseAppSessionActionsInput) {
    * Returns an error object so the calling dialog can display failures.
    */
   const handleImportSessionById = useCallback(
-    async (sessionId: string): Promise<{ ok: true; projectId: string } | { error: string }> => {
-      const trimmed = sessionId.trim();
-      if (!trimmed) return { error: "Session id is empty" };
+    async (rawInput: string): Promise<{ ok: true; projectId: string } | { error: string }> => {
+      // Tolerant input parsing: users may paste surrounding quotes, URLs, or
+      // a prefixed label like "claude-session-xxx". Extract a UUID-shaped
+      // substring — falls through to the backend's strict check which
+      // returns a clear error if nothing UUID-like is present.
+      const uuidMatch = rawInput.match(
+        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+      );
+      const sessionId = (uuidMatch ? uuidMatch[0] : rawInput).trim();
+      if (!sessionId) return { error: "Session id is empty" };
 
-      const found = await window.claude.ccSessions.findById(trimmed);
+      const found = await window.claude.ccSessions.findById(sessionId);
       if ("error" in found) return { error: found.error };
       if (!("found" in found) || !found.found) {
-        return { error: `Session ${trimmed} not found in ~/.claude/projects` };
+        return { error: `Session ${sessionId} not found in ~/.claude/projects` };
       }
 
-      const cwd = found.cwd ?? found.cwdFallbackFromDirName;
-      if (!cwd) return { error: "Session file has no cwd and directory-name fallback is missing" };
+      const rawCwd = found.cwd ?? found.cwdFallbackFromDirName;
+      if (!rawCwd) return { error: "Session file has no cwd and directory-name fallback is missing" };
+      // Normalize trailing slash / double separators so that the equality
+      // check below matches regardless of how the user originally registered
+      // the project (with or without a trailing "/"). We don't realpath —
+      // symlink divergence is rare and resolving it in the renderer would
+      // require another IPC round-trip.
+      const cwd = rawCwd.replace(/\/+$/, "");
 
-      // Match an existing Harnss project first — exact-path comparison keeps
-      // us away from symlink resolution rabbit holes; the cwd stored in the
-      // JSONL and project.path both come from user input so they typically
-      // agree without canonicalization.
-      const existing = input.projectManager.projects.find((p) => p.path === cwd);
+      const existing = input.projectManager.projects.find(
+        (p) => p.path.replace(/\/+$/, "") === cwd,
+      );
       let projectId: string;
       if (existing) {
         projectId = existing.id;
