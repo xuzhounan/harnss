@@ -11,6 +11,11 @@ import {
   notifySessionTerminalsRemap,
 } from "@/hooks/useSessionTerminals";
 import {
+  deleteBrowserSession,
+  makeSessionBrowserPersistKey,
+  renameBrowserSession,
+} from "@/components/browser/browser-utils";
+import {
   DRAFT_ID,
   getEffectiveClaudePermissionMode,
   getCodexApprovalPolicy,
@@ -392,6 +397,7 @@ export function useDraftMaterialization({
             void window.claude.terminal.destroySession(DRAFT_ID).catch((err) => {
               reportError("TERMINAL_DESTROY_DRAFT_CANCELLED", err);
             });
+            deleteBrowserSession(makeSessionBrowserPersistKey(DRAFT_ID));
             materializingRef.current = false;
             return "";
           }
@@ -411,6 +417,10 @@ export function useDraftMaterialization({
             void window.claude.terminal.remapSession(DRAFT_ID, failedId).catch((err) => {
               reportError("TERMINAL_REMAP_ACP_FAILED", err);
             });
+            renameBrowserSession(
+              makeSessionBrowserPersistKey(DRAFT_ID),
+              makeSessionBrowserPersistKey(failedId),
+            );
             setInitialMessages(errorMessages);
             setInitialMeta({
               isProcessing: false,
@@ -510,6 +520,10 @@ export function useDraftMaterialization({
           void window.claude.terminal.remapSession(DRAFT_ID, failedId).catch((err) => {
             reportError("TERMINAL_REMAP_CODEX_FAILED", err);
           });
+          renameBrowserSession(
+            makeSessionBrowserPersistKey(DRAFT_ID),
+            makeSessionBrowserPersistKey(failedId),
+          );
           setInitialMessages(errorMessages);
           setInitialMeta({
             isProcessing: false,
@@ -659,6 +673,10 @@ export function useDraftMaterialization({
       void window.claude.terminal.remapSession(DRAFT_ID, sessionId).catch((err) => {
         reportError("TERMINAL_REMAP_DRAFT_TO_SESSION", err);
       });
+      renameBrowserSession(
+        makeSessionBrowserPersistKey(DRAFT_ID),
+        makeSessionBrowserPersistKey(sessionId),
+      );
       if (!reusedPreStarted) {
         if (draftEngine === "acp") {
           // Preserve the user message + processing state through useACP's reset effect

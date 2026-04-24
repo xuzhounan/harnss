@@ -7,6 +7,10 @@ import { bgAgentStore } from "../../lib/background/agent-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { notifySessionTerminalsDestroyed } from "@/hooks/useSessionTerminals";
 import {
+  deleteBrowserSession,
+  makeSessionBrowserPersistKey,
+} from "@/components/browser/browser-utils";
+import {
   DRAFT_ID,
   DEFAULT_PERMISSION_MODE,
   getEffectiveClaudePermissionMode,
@@ -156,6 +160,7 @@ export function useSessionCrud({
       void window.claude.terminal.destroySession(DRAFT_ID).catch((err) => {
         reportError("TERMINAL_DESTROY_STALE_DRAFT", err);
       });
+      deleteBrowserSession(makeSessionBrowserPersistKey(DRAFT_ID));
       setActiveSessionId(DRAFT_ID);
       // Remove any leftover pending DRAFT_ID session from a previous failed ACP start
       setSessions((prev) => prev.filter(s => s.id !== DRAFT_ID).map((s) => ({ ...s, isActive: false })));
@@ -328,6 +333,8 @@ export function useSessionCrud({
       void window.claude.terminal.destroySession(id).catch((err) => {
         reportError("TERMINAL_DESTROY_ON_SESSION_DELETE", err);
       });
+      // Drop browser tabs/URLs persisted for this session.
+      deleteBrowserSession(makeSessionBrowserPersistKey(id));
       if (activeSessionIdRef.current === id) {
         clearQueue();
         setActiveSessionId(null);

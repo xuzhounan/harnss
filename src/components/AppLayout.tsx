@@ -20,6 +20,7 @@ import {
   equalWidthFractions,
 } from "@/lib/layout/constants";
 import type { InstalledAgent } from "@/types";
+import { makeSessionBrowserPersistKey } from "./browser/browser-utils";
 import { AppSidebar } from "./AppSidebar";
 import { ChatHeader } from "./ChatHeader";
 import { ChatSearchBar } from "./ChatSearchBar";
@@ -988,7 +989,7 @@ export function AppLayout() {
   ) => (
     <ToolIslandContent
       toolId={toolId}
-      persistKey={`main:${spaceManager.activeSpaceId}`}
+      persistKey={makeSessionBrowserPersistKey(manager.activeSessionId)}
       headerControls={controls}
       projectPath={activeProjectPath}
       projectRoot={activeSpaceProject?.path}
@@ -1000,7 +1001,7 @@ export function AppLayout() {
       hasLiveSession={!manager.isDraft}
       {...toolIslandCtx}
     />
-  ), [activeProjectId, activeProjectPath, activeSpaceProject?.path, manager.activeSession?.engine, manager.activeSessionId, manager.isDraft, manager.messages, spaceManager.activeSpaceId, toolIslandCtx]);
+  ), [activeProjectId, activeProjectPath, activeSpaceProject?.path, manager.activeSession?.engine, manager.activeSessionId, manager.isDraft, manager.messages, toolIslandCtx]);
   const handleMoveMainBottomToolToTop = useCallback(
     (islandId: string) => moveBottomToolToTop(mainToolWorkspace, islandId, canFitToolAsNewColumn),
     [mainToolWorkspace, canFitToolAsNewColumn],
