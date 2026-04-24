@@ -19,6 +19,8 @@ import { PreReleaseBanner } from "./PreReleaseBanner";
 import { ProjectSection } from "./sidebar/ProjectSection";
 import { SidebarActionsProvider } from "./sidebar/SidebarActionsContext";
 import { ArchivedSection } from "./sidebar/ArchivedSection";
+import { ImportSessionDialog } from "./ImportSessionDialog";
+import { KeyRound } from "lucide-react";
 import { useAgentContext } from "./AgentContext";
 import { clearSidebarDragPayload, isSidebarDragKind } from "@/lib/sidebar/dnd";
 
@@ -103,6 +105,12 @@ interface AppSidebarProjectActions {
   onRenameProject: (id: string, name: string) => void;
   onUpdateProjectIcon: (id: string, icon: string | null, iconType: "emoji" | "lucide" | "simple" | null) => void;
   onImportCCSession: (projectId: string, ccSessionId: string) => void;
+  /**
+   * Import a session by id alone — backend scans ~/.claude/projects for the
+   * session file, then auto-assigns to a matching Harnss project (creating
+   * one at the session's cwd if none exists).
+   */
+  onImportSessionById: (sessionId: string) => Promise<{ ok: true; projectId: string } | { error: string }>;
   onToggleSidebar: () => void;
   onNavigateToMessage: (sessionId: string, messageId: string) => void;
   onMoveProjectToSpace: (projectId: string, spaceId: string) => void;
@@ -176,6 +184,7 @@ export const AppSidebar = memo(function AppSidebar({
     onRenameProject,
     onUpdateProjectIcon,
     onImportCCSession,
+    onImportSessionById,
     onToggleSidebar,
     onNavigateToMessage,
     onMoveProjectToSpace,
@@ -215,6 +224,9 @@ export const AppSidebar = memo(function AppSidebar({
   // Slide animation when entering/leaving draft creation mode
   const prevIsCreatingRef = useRef(isCreating);
   const [draftSlideClass, setDraftSlideClass] = useState("");
+  // "Import session by ID" dialog visibility — triggered from the sidebar
+  // header button next to "Add project".
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
 
   useEffect(() => {
     if (prevIsCreatingRef.current === isCreating) return;
@@ -538,15 +550,30 @@ export const AppSidebar = memo(function AppSidebar({
         <div className="flex-1" />
 
         {!isCreating && (
-          <button
-            onClick={onCreateProject}
-            className="no-drag flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium text-sidebar-foreground/70 transition-all hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
-          >
-            <Plus className="h-3.5 w-3.5 shrink-0" />
-            <span>Add project</span>
-          </button>
+          <>
+            <button
+              onClick={() => setImportDialogOpen(true)}
+              title="Import session by ID"
+              className="no-drag flex h-7 w-7 items-center justify-center rounded-full text-sidebar-foreground/70 transition-all hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
+            >
+              <KeyRound className="h-3.5 w-3.5 shrink-0" />
+            </button>
+            <button
+              onClick={onCreateProject}
+              className="no-drag flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium text-sidebar-foreground/70 transition-all hover:bg-black/5 hover:text-sidebar-foreground dark:hover:bg-white/10"
+            >
+              <Plus className="h-3.5 w-3.5 shrink-0" />
+              <span>Add project</span>
+            </button>
+          </>
         )}
       </div>
+
+      <ImportSessionDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        onImport={onImportSessionById}
+      />
 
       {isCreating && draftSpace ? (
         /* ── Draft space creation UI (replaces project list) ── */

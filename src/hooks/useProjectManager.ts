@@ -28,6 +28,25 @@ export function useProjectManager() {
     return project;
   }, []);
 
+  /**
+   * Non-interactive project creation — takes a filesystem path directly
+   * instead of prompting via the system directory picker. Returns the existing
+   * project if one already tracks the same path. Used by the "import session
+   * by id" flow where cwd is discovered from the session file.
+   */
+  const createProjectAtPath = useCallback(
+    async (folderPath: string, spaceId?: string): Promise<{ project: Project; created: boolean } | { error: string }> => {
+      const result = await window.claude.projects.createAtPath(folderPath, spaceId);
+      if ("error" in result) return result;
+      setProjects((prev) => {
+        if (prev.some((p) => p.id === result.project.id)) return prev;
+        return [...prev, result.project];
+      });
+      return result;
+    },
+    [],
+  );
+
   const deleteProject = useCallback(async (id: string) => {
     await window.claude.projects.delete(id);
     setProjects((prev) => prev.filter((p) => p.id !== id));
@@ -77,6 +96,7 @@ export function useProjectManager() {
   return {
     projects,
     createProject,
+    createProjectAtPath,
     createDevProject,
     deleteProject,
     renameProject,

@@ -77,6 +77,45 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
     }
   });
 
+  /**
+   * Create a project at a known filesystem path without prompting the user.
+   * Intended for programmatic flows (e.g. auto-rebuilding a session whose
+   * cwd was discovered via session-id lookup). If a project already exists
+   * at that path, it's returned as-is.
+   */
+  ipcMain.handle("projects:create-at-path", async (_event, folderPath: string, spaceId?: string) => {
+    try {
+      const trimmed = String(folderPath || "").trim();
+      if (!trimmed) return { error: "Empty path" };
+      if (!fs.existsSync(trimmed)) {
+        return { error: `Path does not exist: ${trimmed}` };
+      }
+      const stat = fs.statSync(trimmed);
+      if (!stat.isDirectory()) {
+        return { error: `Not a directory: ${trimmed}` };
+      }
+
+      const projects = readProjects();
+      const existing = projects.find((p) => p.path === trimmed);
+      if (existing) return { project: existing, created: false };
+
+      const project: Project = {
+        id: crypto.randomUUID(),
+        name: path.basename(trimmed),
+        path: trimmed,
+        createdAt: Date.now(),
+        ...(spaceId && spaceId !== "default" ? { spaceId } : {}),
+      };
+      projects.push(project);
+      writeProjects(projects);
+      void captureEvent("project_created");
+      return { project, created: true };
+    } catch (err) {
+      const message = reportError("PROJECTS:CREATE_AT_PATH_ERR", err, { folderPath });
+      return { error: message };
+    }
+  });
+
   ipcMain.handle("projects:create-dev", (_event, name: string, spaceId?: string) => {
     try {
       const projectName = String(name || "").trim() || "Example Project";

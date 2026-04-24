@@ -18,7 +18,7 @@ interface UseAppSessionActionsInput {
   setShowSettings: (show: SettingsSection | false) => void;
   refreshAgents: () => Promise<void> | void;
   activeSpaceId: string;
-  projectManager: Pick<ProjectManagerState, "projects" | "createProject" | "createDevProject">;
+  projectManager: Pick<ProjectManagerState, "projects" | "createProject" | "createProjectAtPath" | "createDevProject">;
 }
 
 export function useAppSessionActions(input: UseAppSessionActionsInput) {
@@ -180,6 +180,48 @@ export function useAppSessionActions(input: UseAppSessionActionsInput) {
     await input.manager.importCCSession(projectId, ccSessionId);
   }, [input.manager]);
 
+  /**
+   * End-to-end import by session id — given only a Claude Code session id,
+   * locate the JSONL across ~/.claude/projects/*, read its cwd, map it to a
+   * Harnss project (creating one at that path if missing), then run the
+   * existing CC import so the session is persisted + switched to.
+   *
+   * Returns an error object so the calling dialog can display failures.
+   */
+  const handleImportSessionById = useCallback(
+    async (sessionId: string): Promise<{ ok: true; projectId: string } | { error: string }> => {
+      const trimmed = sessionId.trim();
+      if (!trimmed) return { error: "Session id is empty" };
+
+      const found = await window.claude.ccSessions.findById(trimmed);
+      if ("error" in found) return { error: found.error };
+      if (!("found" in found) || !found.found) {
+        return { error: `Session ${trimmed} not found in ~/.claude/projects` };
+      }
+
+      const cwd = found.cwd ?? found.cwdFallbackFromDirName;
+      if (!cwd) return { error: "Session file has no cwd and directory-name fallback is missing" };
+
+      // Match an existing Harnss project first — exact-path comparison keeps
+      // us away from symlink resolution rabbit holes; the cwd stored in the
+      // JSONL and project.path both come from user input so they typically
+      // agree without canonicalization.
+      const existing = input.projectManager.projects.find((p) => p.path === cwd);
+      let projectId: string;
+      if (existing) {
+        projectId = existing.id;
+      } else {
+        const created = await input.projectManager.createProjectAtPath(cwd, input.activeSpaceId);
+        if ("error" in created) return { error: `Failed to create project at ${cwd}: ${created.error}` };
+        projectId = created.project.id;
+      }
+
+      await input.manager.importCCSession(projectId, found.ccSessionId);
+      return { ok: true, projectId };
+    },
+    [input.activeSpaceId, input.manager, input.projectManager],
+  );
+
   const handleSeedDevExampleSpaceData = useCallback(async () => {
     if (!import.meta.env.DEV) return;
     const { seedDevExampleSpaceData } = await import("@/lib/dev-seeding/space-seeding");
@@ -222,6 +264,7 @@ export function useAppSessionActions(input: UseAppSessionActionsInput) {
     handleUnqueueMessage,
     handleSelectSession,
     handleCreateProject,
+    handleImportSessionById,
     handleImportCCSession,
     handleSeedDevExampleSpaceData,
     handleNavigateToMessage,
