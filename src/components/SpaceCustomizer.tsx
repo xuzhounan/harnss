@@ -8,49 +8,10 @@ import { icons } from "lucide-react";
 import { useResolvedTheme } from "@/hooks/useTheme";
 import { SPACE_COLOR_PRESETS } from "@/hooks/useSpaceManager";
 import type { SpaceColor } from "@/types";
+import { CURATED_EMOJIS, CURATED_LUCIDE_ICONS } from "@/lib/icon-catalog";
 
-// ── Expanded curated emoji set (~160 emojis) ──
-
-export const CURATED_EMOJIS = [
-  // Stars & sparkles (most popular for spaces — lead with these)
-  "⭐", "🌟", "✨", "💫", "🌠", "⚡", "🔥", "💥",
-  // Smileys & people
-  "😀", "😎", "🤓", "🧑‍💻", "👾", "🤖", "👻", "💀",
-  "😈", "🥸", "🤩", "😇", "🫡", "🥳", "🤠", "👽",
-  // Hearts & symbols
-  "❤️", "💜", "💙", "💚", "💛", "🧡", "🩷", "🖤",
-  "🩵", "🤍", "💝", "💖", "♾️", "☯️", "🔮", "🧿",
-  // Nature & weather
-  "🌈", "🌊", "🍀", "🌸", "🌺", "🌻", "🌿", "🍂",
-  "🌙", "☀️", "🌤️", "⛈️", "❄️", "🌪️", "🔆", "🌕",
-  // Animals
-  "🐱", "🐶", "🦊", "🐻", "🐼", "🦁", "🐸", "🦋",
-  "🐝", "🦄", "🐙", "🐬", "🦅", "🐺", "🦎", "🐢",
-  // Food & drink
-  "☕", "🍕", "🍔", "🌮", "🍩", "🧁", "🍎", "🍑",
-  "🍣", "🥐", "🍷", "🧋", "🫐", "🍒", "🥑", "🍜",
-  // Objects & tools
-  "🚀", "💎", "🎯", "🎨", "🎵", "📦", "💡", "🔔",
-  "🏆", "🎮", "🎲", "📌", "🔑", "🛡️", "⚙️", "🔧",
-  "📐", "🧪", "💻", "🖥️", "📱", "🔬", "🧲", "📡",
-  // Activities & sports
-  "🎭", "🎬", "🎪", "🎸", "🎤", "🎧", "🎾", "🏀",
-  // Travel & places
-  "🏠", "🏔️", "🌍", "🏝️", "🗼", "🏗️", "🌋", "🗺️",
-  // Symbols & misc
-  "🌀", "📚", "🧬", "🔒", "🏴‍☠️", "🚩", "🏁", "🎌",
-  "💧", "🪐", "🛸", "🧊", "🫧", "🪩", "🎀", "🪬",
-];
-
-// ── Popular lucide icons ──
-
-const POPULAR_ICONS = [
-  "Layers", "Rocket", "Code", "Terminal", "Globe", "Heart", "Star", "Zap",
-  "Shield", "Target", "Compass", "Flame", "Gem", "Crown", "Coffee", "Music",
-  "Camera", "Book", "Briefcase", "Cpu", "Database", "Feather", "Gift", "Home",
-  "Key", "Lamp", "Map", "Palette", "PenTool", "Puzzle", "Scissors", "Settings",
-  "Sparkles", "Sun", "Umbrella", "Wand", "Wrench", "Box", "Cloud", "Flag",
-];
+// Re-export so existing consumers importing from this file keep working.
+export { CURATED_EMOJIS };
 
 // ── Color helpers ──
 
@@ -95,9 +56,10 @@ export function SpaceCustomizer({
 
   const filteredIcons = useMemo(() => {
     const allNames = Object.keys(icons);
-    if (!iconSearch) return POPULAR_ICONS.filter((n) => allNames.includes(n));
+    const allNameSet = new Set(allNames);
+    if (!iconSearch) return CURATED_LUCIDE_ICONS.filter((n) => allNameSet.has(n));
     const q = iconSearch.toLowerCase();
-    return allNames.filter((n) => n.toLowerCase().includes(q)).slice(0, 80);
+    return allNames.filter((n) => n.toLowerCase().includes(q)).slice(0, 200);
   }, [iconSearch]);
 
   const handleSelectColor = useCallback(

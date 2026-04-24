@@ -3,37 +3,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { icons } from "lucide-react";
-
-const CURATED_EMOJIS = [
-  // Faces & People
-  "😀", "😎", "🤓", "🧑‍💻", "👾", "🤖", "👻", "💀",
-  // Nature
-  "🌟", "⭐", "🔥", "💧", "🌈", "🌊", "🍀", "🌸",
-  // Objects
-  "🚀", "💎", "🎯", "🎨", "🎵", "📦", "🔮", "💡",
-  "⚡", "🔔", "🏆", "🎮", "🎲", "📌", "🔑", "🛡️",
-  // Symbols
-  "❤️", "💜", "💙", "💚", "💛", "🧡", "🩷", "🖤",
-  "✨", "💫", "🌀", "♾️", "⚙️", "🔧", "📐", "🧪",
-  // Animals
-  "🐱", "🐶", "🦊", "🐻", "🐼", "🦁", "🐸", "🦋",
-  // Food
-  "☕", "🍕", "🍔", "🌮", "🍩", "🧁", "🍎", "🍑",
-  // Travel
-  "🏠", "🏔️", "🌍", "🏝️", "🌙", "☀️", "⛈️", "🌤️",
-  // Misc
-  "📚", "💻", "🖥️", "📱", "🎪", "🏗️", "🧲", "🔬",
-  "🎭", "🎬", "📡", "🧬", "🔒", "🏴‍☠️", "🚩", "🏁",
-];
-
-// Popular lucide icon names — must match PascalCase keys in the `icons` map
-const POPULAR_ICONS = [
-  "Layers", "Rocket", "Code", "Terminal", "Globe", "Heart", "Star", "Zap",
-  "Shield", "Target", "Compass", "Flame", "Gem", "Crown", "Coffee", "Music",
-  "Camera", "Book", "Briefcase", "Cpu", "Database", "Feather", "Gift", "Home",
-  "Key", "Lamp", "Map", "Palette", "PenTool", "Puzzle", "Scissors", "Settings",
-  "Sparkles", "Sun", "Umbrella", "Wand", "Wrench", "Box", "Cloud", "Flag",
-];
+import { CURATED_EMOJIS, CURATED_LUCIDE_ICONS } from "@/lib/icon-catalog";
 
 interface IconPickerProps {
   value: string;
@@ -47,9 +17,10 @@ export function IconPicker({ value, iconType, onChange }: IconPickerProps) {
 
   const filteredIcons = useMemo(() => {
     const allNames = Object.keys(icons);
-    if (!search) return POPULAR_ICONS.filter((n) => allNames.includes(n));
+    const allNameSet = new Set(allNames);
+    if (!search) return CURATED_LUCIDE_ICONS.filter((n) => allNameSet.has(n));
     const q = search.toLowerCase();
-    return allNames.filter((n) => n.toLowerCase().includes(q)).slice(0, 80);
+    return allNames.filter((n) => n.toLowerCase().includes(q)).slice(0, 200);
   }, [search]);
 
   return (
