@@ -460,6 +460,20 @@ export const InputBar = memo(function InputBar({
   // ── Keyboard handling ──
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // IME composition guard: while the user is composing with a pinyin / kana /
+    // other input method, Enter / Arrow keys / Tab belong to the IME candidate
+    // window and must NOT trigger our own handlers (send, slash-picker nav,
+    // mention nav, newline). `isComposing` covers modern browsers; keyCode 229
+    // is a legacy fallback some browsers still use on composition commit.
+    //
+    // Escape is deliberately let through: it cancels composition AND should
+    // close the slash/mention picker in the same keypress. Otherwise users
+    // have to press Escape twice to clear both.
+    const isComposing = e.nativeEvent.isComposing || e.keyCode === 229;
+    if (isComposing && e.key !== "Escape") {
+      return;
+    }
+
     // Slash command picker keyboard navigation
     if (command.showCommands && command.cmdResults.length > 0) {
       if (e.key === "ArrowDown") {

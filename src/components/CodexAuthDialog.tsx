@@ -212,7 +212,10 @@ export const CodexAuthDialog = memo(function CodexAuthDialog({
             placeholder="sk-..."
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleApiKeySubmit()}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+              if (e.key === "Enter") handleApiKeySubmit();
+            }}
             className="h-10 w-full rounded-lg border bg-transparent px-3 text-sm outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
             autoFocus
           />
