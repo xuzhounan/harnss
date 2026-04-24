@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useState,
   useRef,
   useCallback,
@@ -57,6 +58,11 @@ import { useMentionAutocomplete } from "./useMentionAutocomplete";
 import { CommandPicker } from "./CommandPicker";
 import { useCommandAutocomplete } from "./CommandPicker";
 
+/** localStorage key for a per-session composer draft. */
+function draftStorageKey(draftKey: string): string {
+  return `harnss-composer-draft-${draftKey}`;
+}
+
 export interface InputBarProps {
   onSend: (text: string, images?: ImageAttachment[], displayText?: string) => void;
   onClear?: () => void | Promise<void>;
@@ -111,6 +117,14 @@ export interface InputBarProps {
   onRemoveGrabbedElement?: (id: string) => void;
   /** Open ACP Agents settings */
   onManageACPs?: () => void;
+  /**
+   * Stable key (typically activeSessionId) used to persist the composer's
+   * contents across remounts. Omitted or null disables persistence — useful
+   * for detached contexts like onboarding samples. When the key changes the
+   * current content is saved for the previous key and the new key's content
+   * is restored from localStorage.
+   */
+  draftKey?: string | null;
 }
 
 export const InputBar = memo(function InputBar({
@@ -150,6 +164,7 @@ export const InputBar = memo(function InputBar({
   grabbedElements,
   onRemoveGrabbedElement,
   onManageACPs,
+  draftKey,
 }: InputBarProps) {
   // ── Core state ──
   const [hasContent, setHasContent] = useState(false);
@@ -247,9 +262,48 @@ export const InputBar = memo(function InputBar({
       setAttachments([]);
       mention.closeMentions();
       command.setShowCommands(false);
+      // Drop the persisted draft on send / explicit clear so it doesn't
+      // resurrect next time we restore for this draftKey.
+      if (draftKey) {
+        try { localStorage.removeItem(draftStorageKey(draftKey)); } catch { /* quota / mode */ }
+      }
     },
-    [mention.closeMentions, command.setShowCommands],
+    [mention.closeMentions, command.setShowCommands, draftKey],
   );
+
+  // Save/restore the composer's DOM content per draftKey (session id).
+  // - On mount / draftKey change: restore the stored innerHTML for the new key
+  //   so mention chips + text both survive a space switch that unmounts us.
+  // - On cleanup (unmount / draftKey change): save the current DOM under the
+  //   PREVIOUS key. useEffect cleanup runs before the next effect body, so the
+  //   save always targets the key the DOM actually belonged to.
+  useEffect(() => {
+    if (!draftKey) return;
+    const el = editableRef.current;
+    if (!el) return;
+
+    try {
+      const stored = localStorage.getItem(draftStorageKey(draftKey));
+      if (stored && stored.length > 0) {
+        el.innerHTML = stored;
+        const hasText = Boolean(el.textContent?.trim());
+        hasContentRef.current = hasText;
+        setHasContent(hasText);
+      }
+    } catch { /* ignore — fall through to empty composer */ }
+
+    return () => {
+      const current = el.innerHTML;
+      const hasText = Boolean(el.textContent?.trim());
+      try {
+        if (current && hasText) {
+          localStorage.setItem(draftStorageKey(draftKey), current);
+        } else {
+          localStorage.removeItem(draftStorageKey(draftKey));
+        }
+      } catch { /* ignore */ }
+    };
+  }, [draftKey]);
 
   // ── Image attachments ──
 
