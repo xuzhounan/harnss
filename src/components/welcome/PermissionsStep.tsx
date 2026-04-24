@@ -1,8 +1,8 @@
 import { motion } from "motion/react";
-import { Shield, ShieldCheck, ShieldOff, Check } from "lucide-react";
+import { Shield, ShieldCheck, ShieldOff, Sparkles, Check } from "lucide-react";
 import { PERMISSION_MODES, type PermissionsStepProps } from "./shared";
 
-const ICON_MAP = { Shield, ShieldCheck, ShieldOff } as const;
+const ICON_MAP = { Shield, ShieldCheck, ShieldOff, Sparkles } as const;
 
 export function PermissionsStep({
   permissionMode,

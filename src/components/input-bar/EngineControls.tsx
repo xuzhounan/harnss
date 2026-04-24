@@ -37,6 +37,11 @@ function PermissionDropdown({
   const selectedMode =
     PERMISSION_MODES.find((m) => m.id === permissionMode) ??
     PERMISSION_MODES[0];
+  // Codex doesn't support Claude SDK's AI-judged `auto` mode; filter it out
+  // when rendering the Codex-style dropdown (showDetails=true).
+  const visibleModes = showDetails
+    ? PERMISSION_MODES.filter((m) => !m.claudeOnly)
+    : PERMISSION_MODES;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -52,8 +57,8 @@ function PermissionDropdown({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
-        {PERMISSION_MODES.map((m) => {
-          const details = showDetails
+        {visibleModes.map((m) => {
+          const details = showDetails && m.id !== "auto"
             ? CODEX_PERMISSION_MODE_DETAILS[m.id]
             : undefined;
           return (
