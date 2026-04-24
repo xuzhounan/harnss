@@ -10,6 +10,7 @@ const PERMISSION_MODE_LABELS: Record<string, string> = {
   plan: "Plan",
   default: "Ask Before Edits",
   acceptEdits: "Accept Edits",
+  auto: "Auto",
   bypassPermissions: "Allow All",
 };
 
