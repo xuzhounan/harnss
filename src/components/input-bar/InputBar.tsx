@@ -465,7 +465,12 @@ export const InputBar = memo(function InputBar({
     // window and must NOT trigger our own handlers (send, slash-picker nav,
     // mention nav, newline). `isComposing` covers modern browsers; keyCode 229
     // is a legacy fallback some browsers still use on composition commit.
-    if (e.nativeEvent.isComposing || e.keyCode === 229) {
+    //
+    // Escape is deliberately let through: it cancels composition AND should
+    // close the slash/mention picker in the same keypress. Otherwise users
+    // have to press Escape twice to clear both.
+    const isComposing = e.nativeEvent.isComposing || e.keyCode === 229;
+    if (isComposing && e.key !== "Escape") {
       return;
     }
 
