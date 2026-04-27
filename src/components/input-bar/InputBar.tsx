@@ -1,4 +1,5 @@
 import {
+  useLayoutEffect,
   useState,
   useRef,
   useCallback,
@@ -6,6 +7,7 @@ import {
   memo,
   type KeyboardEvent,
 } from "react";
+import DOMPurify from "dompurify";
 import {
   ArrowUp,
   Loader2,
@@ -56,6 +58,94 @@ import { MentionPicker } from "./MentionPicker";
 import { useMentionAutocomplete } from "./useMentionAutocomplete";
 import { CommandPicker } from "./CommandPicker";
 import { useCommandAutocomplete } from "./CommandPicker";
+
+/** localStorage key for a per-session composer draft. */
+function draftStorageKey(draftKey: string): string {
+  return `harnss-composer-draft-${draftKey}`;
+}
+
+/**
+ * Which draftKey has the current "write lease" on localStorage. When the same
+ * session is somehow surfaced in two InputBar instances (same pane reopen
+ * race, split view, or a second window), only the first-mounted owner writes
+ * back — the rest restore from storage but stay passive, so they never
+ * clobber the primary composer's state.
+ *
+ * Module-level Map, not context, so it survives React reconciliation without
+ * needing a provider plumbed through every mount site.
+ */
+const draftKeyOwners = new Set<string>();
+
+/**
+ * Sanitize HTML pulled out of localStorage before re-injecting it via
+ * innerHTML. The composer only ever produces text nodes, <br>, and
+ * mention chips (spans with a data-mention-path attribute), so we whitelist
+ * exactly that and strip every event handler / script / URL-bearing tag.
+ *
+ * Why it matters: a devtools user, browser extension, or a second Electron
+ * window could theoretically tamper with the saved blob. Without sanitize,
+ * replaying `<img onerror="...">` on mount would execute the handler.
+ */
+function sanitizeDraftHtml(raw: string): string {
+  return DOMPurify.sanitize(raw, {
+    ALLOWED_TAGS: ["br", "span", "div", "p"],
+    ALLOWED_ATTR: ["data-mention-path", "class", "contenteditable", "data-mention-chip"],
+    FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "img", "svg"],
+    FORBID_ATTR: ["onerror", "onload", "onclick", "onmouseover", "href", "src", "style"],
+  });
+}
+
+/**
+ * Versioned blob format for per-session composer drafts. v1 carries text
+ * (innerHTML) and image attachments; future fields can be added without
+ * breaking older readers via the version tag.
+ *
+ * Reads also accept the legacy schema (raw HTML string written by the v0
+ * implementation) so existing drafts survive the upgrade.
+ */
+const DRAFT_BLOB_VERSION = 1;
+interface DraftBlobV1 {
+  v: 1;
+  html: string;
+  attachments: ImageAttachment[];
+}
+
+const VALID_MEDIA_TYPES: ReadonlySet<ImageAttachment["mediaType"]> = new Set([
+  "image/png", "image/jpeg", "image/gif", "image/webp",
+]);
+
+function isValidAttachment(value: unknown): value is ImageAttachment {
+  if (!value || typeof value !== "object") return false;
+  const a = value as Record<string, unknown>;
+  return typeof a.id === "string"
+    && typeof a.data === "string"
+    && typeof a.mediaType === "string"
+    && VALID_MEDIA_TYPES.has(a.mediaType as ImageAttachment["mediaType"]);
+}
+
+/**
+ * Parse a stored draft blob, accepting both v1 JSON and the legacy raw-HTML
+ * schema. Always returns a normalized DraftBlobV1; arbitrary input that fails
+ * validation collapses to an empty draft.
+ */
+function parseDraftBlob(raw: string): DraftBlobV1 {
+  if (!raw) return { v: 1, html: "", attachments: [] };
+  // Try v1 JSON first
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && parsed.v === 1) {
+      const html = typeof parsed.html === "string" ? parsed.html : "";
+      const attachments = Array.isArray(parsed.attachments)
+        ? parsed.attachments.filter(isValidAttachment)
+        : [];
+      return { v: 1, html, attachments };
+    }
+  } catch {
+    // Not JSON — fall through to legacy raw-HTML interpretation
+  }
+  // Legacy v0: raw HTML string only
+  return { v: 1, html: raw, attachments: [] };
+}
 
 export interface InputBarProps {
   onSend: (text: string, images?: ImageAttachment[], displayText?: string) => void;
@@ -111,6 +201,14 @@ export interface InputBarProps {
   onRemoveGrabbedElement?: (id: string) => void;
   /** Open ACP Agents settings */
   onManageACPs?: () => void;
+  /**
+   * Stable key (typically activeSessionId) used to persist the composer's
+   * contents across remounts. Omitted or null disables persistence — useful
+   * for detached contexts like onboarding samples. When the key changes the
+   * current content is saved for the previous key and the new key's content
+   * is restored from localStorage.
+   */
+  draftKey?: string | null;
 }
 
 export const InputBar = memo(function InputBar({
@@ -150,6 +248,7 @@ export const InputBar = memo(function InputBar({
   grabbedElements,
   onRemoveGrabbedElement,
   onManageACPs,
+  draftKey,
 }: InputBarProps) {
   // ── Core state ──
   const [hasContent, setHasContent] = useState(false);
@@ -247,9 +346,104 @@ export const InputBar = memo(function InputBar({
       setAttachments([]);
       mention.closeMentions();
       command.setShowCommands(false);
+      // Drop the persisted draft on send / explicit clear so it doesn't
+      // resurrect next time we restore for this draftKey. We always want to
+      // purge (even for non-owners) since a send from any instance means the
+      // draft is "spent" from the user's perspective.
+      if (draftKey) {
+        try { localStorage.removeItem(draftStorageKey(draftKey)); } catch { /* quota / mode */ }
+      }
     },
-    [mention.closeMentions, command.setShowCommands],
+    [mention.closeMentions, command.setShowCommands, draftKey],
   );
+
+  // Save/restore the composer's DOM content per draftKey (session id).
+  // - On mount / draftKey change: restore the stored innerHTML for the new key
+  //   so mention chips + text both survive a space switch that unmounts us.
+  // - On cleanup (unmount / draftKey change): save the current DOM under the
+  //   PREVIOUS key. useEffect cleanup runs before the next effect body, so the
+  //   save always targets the key the DOM actually belonged to.
+  // - Write-lease: if another InputBar is already editing this draftKey, we
+  //   read storage but never write back, so the primary composer stays the
+  //   single source of truth.
+  // Mirror attachments into a ref so the cleanup function can read the latest
+  // value when it runs — captured-at-mount state would always serialize the
+  // empty array.
+  const attachmentsRef = useRef<ImageAttachment[]>(attachments);
+  attachmentsRef.current = attachments;
+
+  // Whether this composer instance owns the persistence write-lease. Reflected
+  // back to the user via a read-only state on the contenteditable element so
+  // the second pane in a duplicate-session split can't appear-to-edit and
+  // then silently lose its content on unmount.
+  const [isDraftOwner, setIsDraftOwner] = useState(true);
+
+  // useLayoutEffect (not useEffect) keeps the save/restore work inside the
+  // same commit phase as the prop change — eliminates the visible "flash of
+  // previous session's text" the user sees during async effect scheduling.
+  useLayoutEffect(() => {
+    if (!draftKey) {
+      setIsDraftOwner(true);
+      return;
+    }
+    const el = editableRef.current;
+    if (!el) return;
+
+    const isOwner = !draftKeyOwners.has(draftKey);
+    if (isOwner) draftKeyOwners.add(draftKey);
+    setIsDraftOwner(isOwner);
+
+    try {
+      const stored = localStorage.getItem(draftStorageKey(draftKey));
+      if (stored && stored.length > 0) {
+        const blob = parseDraftBlob(stored);
+        // Sanitize before innerHTML: the blob comes out of localStorage,
+        // which any devtools user / extension could have written. Strip
+        // event handlers / unexpected tags so we never execute tampered
+        // scripts just by restoring a draft.
+        el.innerHTML = sanitizeDraftHtml(blob.html);
+        const hasText = Boolean(el.textContent?.trim());
+        hasContentRef.current = hasText;
+        setHasContent(hasText || blob.attachments.length > 0);
+        setAttachments(blob.attachments);
+        // Sync the ref synchronously — setAttachments schedules an async
+        // commit, but a same-pass cleanup (StrictMode double-invoke or
+        // rapid key flip) would otherwise read the previous render's empty
+        // value and clobber the storage we just restored from.
+        attachmentsRef.current = blob.attachments;
+      } else {
+        // New session has no saved draft — reset both the DOM and the
+        // attachments state so nothing from the previous session lingers.
+        el.innerHTML = "";
+        hasContentRef.current = false;
+        setHasContent(false);
+        setAttachments([]);
+        attachmentsRef.current = [];
+      }
+    } catch { /* ignore — fall through to empty composer */ }
+
+    return () => {
+      if (isOwner) {
+        const html = el.innerHTML;
+        const hasText = Boolean(el.textContent?.trim());
+        const pendingAttachments = attachmentsRef.current;
+        const blob: DraftBlobV1 = {
+          v: DRAFT_BLOB_VERSION,
+          html: hasText ? html : "",
+          attachments: pendingAttachments,
+        };
+        const hasAnything = hasText || pendingAttachments.length > 0;
+        try {
+          if (hasAnything) {
+            localStorage.setItem(draftStorageKey(draftKey), JSON.stringify(blob));
+          } else {
+            localStorage.removeItem(draftStorageKey(draftKey));
+          }
+        } catch { /* quota / private mode */ }
+        draftKeyOwners.delete(draftKey);
+      }
+    };
+  }, [draftKey]);
 
   // ── Image attachments ──
 
@@ -792,22 +986,25 @@ export const InputBar = memo(function InputBar({
           )}
           <div
             ref={editableRef}
-            contentEditable
+            contentEditable={isDraftOwner && !isAwaitingAcpOptions}
             onInput={handleEditableInput}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             className={`min-h-[24px] max-h-[200px] overflow-y-auto text-[14.5px] leading-relaxed outline-none whitespace-pre-wrap wrap-break-word ${
               isAwaitingAcpOptions
                 ? "cursor-wait text-muted-foreground/60"
+                : !isDraftOwner
+                ? "cursor-not-allowed text-muted-foreground/60"
                 : "text-foreground"
             }`}
+            title={!isDraftOwner ? "This session is being edited in another pane — switch there to type." : undefined}
             role="textbox"
             aria-multiline="true"
             spellCheck={false}
             autoCorrect="off"
             autoCapitalize="off"
             data-gramm="false"
-            aria-disabled={isAwaitingAcpOptions}
+            aria-disabled={isAwaitingAcpOptions || !isDraftOwner}
             suppressContentEditableWarning
           />
         </div>
