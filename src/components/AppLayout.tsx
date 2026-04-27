@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useAppOrchestrator } from "@/hooks/useAppOrchestrator";
 import { useCliSession } from "@/hooks/useCliSession";
 import { CliChatPanel } from "@/components/cli/CliChatPanel";
+import { SessionPicker } from "@/components/SessionPicker";
 import { useSpaceTheme } from "@/hooks/useSpaceTheme";
 import { useGlassTheme } from "@/hooks/useGlassTheme";
 import { ThemeProvider } from "@/hooks/useTheme";
@@ -112,6 +113,28 @@ export function AppLayout() {
     if (!session) return;
     void cli.stop(session.id);
   }, [cli, manager.activeSession]);
+
+  // Cmd+P / Ctrl+P quick-switcher state. Stored at the top layout layer
+  // because the picker spans the entire workspace and needs access to
+  // both the sidebar session list and the CLI resume entry point.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      // Ignore auto-repeat from holding the chord — without this, holding
+      // Cmd+P briefly toggles the picker rapidly.
+      if (e.repeat) return;
+      const isModifier = isMac ? e.metaKey : e.ctrlKey;
+      if (!isModifier) return;
+      // P (Cmd+P) reserved by browsers for "Print" on web — Electron lets
+      // us hijack it. Lowercase check to handle CapsLock + IME composition.
+      if (e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        setPickerOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, []);
   const {
     agents, selectedAgent, saveAgent, deleteAgent, handleAgentChange, lockedEngine, lockedAgentId,
   } = agentState;
@@ -1876,6 +1899,13 @@ export function AppLayout() {
           onComplete={handleWelcomeComplete}
         />
       )}
+      <SessionPicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        sessions={manager.sessions}
+        onSelectSidebarSession={handleSelectSession}
+        onResumeCliSessionById={handleResumeCliSessionById}
+      />
     </div>
     </AgentProvider>
     </ThemeProvider>
