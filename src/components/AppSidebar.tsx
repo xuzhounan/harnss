@@ -177,6 +177,12 @@ interface AppSidebarSessionActions {
    * option when undefined.
    */
   onForkSidebarCliSession?: (sessionId: string) => void;
+  /**
+   * Quick-resume an existing CLI sidebar session — switches to it and
+   * spawns `claude --resume <id>` directly from the right-click menu.
+   * Optional — SessionItem hides the menu option when undefined.
+   */
+  onResumeSidebarCliSession?: (sessionId: string) => void;
 }
 
 interface AppSidebarProps {
@@ -250,6 +256,7 @@ export const AppSidebar = memo(function AppSidebar({
     onOpenInSplitView,
     canOpenSessionInSplitView,
     onForkSidebarCliSession,
+    onResumeSidebarCliSession,
   } = sessionActions;
   const { agents } = useAgentContext();
   const isCreating = draftSpaceId !== null;
@@ -356,6 +363,7 @@ export const AppSidebar = memo(function AppSidebar({
       openInSplitView: onOpenInSplitView,
       canOpenSessionInSplitView,
       forkCliSession: onForkSidebarCliSession,
+      resumeCliSession: onResumeSidebarCliSession,
     }),
     [
       onSelectSession,
@@ -371,6 +379,7 @@ export const AppSidebar = memo(function AppSidebar({
       onOpenInSplitView,
       canOpenSessionInSplitView,
       onForkSidebarCliSession,
+      onResumeSidebarCliSession,
     ],
   );
 

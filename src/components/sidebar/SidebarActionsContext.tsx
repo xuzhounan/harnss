@@ -16,6 +16,12 @@ export interface SidebarActions {
    * the action when this is undefined.
    */
   forkCliSession?: (id: string) => void;
+  /**
+   * Quick-resume a CLI session — switches to it and spawns
+   * `claude --resume <id>` without requiring the user to navigate
+   * into the session first. CLI-only.
+   */
+  resumeCliSession?: (id: string) => void;
   /** Rename a session. */
   renameSession: (id: string, title: string) => void;
   /** Toggle pin state on a session. */

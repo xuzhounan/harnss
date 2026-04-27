@@ -117,6 +117,7 @@ export function ProjectSection({
     archiveSession,
     unarchiveSession,
     forkCliSession,
+    resumeCliSession,
     renameSession,
     pinSession,
     moveSessionToFolder,
@@ -237,6 +238,11 @@ export function ProjectSection({
           onFork={
             session.engine === "cli" && forkCliSession
               ? () => forkCliSession(session.id)
+              : undefined
+          }
+          onResume={
+            session.engine === "cli" && resumeCliSession
+              ? () => resumeCliSession(session.id)
               : undefined
           }
           onRename={(title) => renameSession(session.id, title)}

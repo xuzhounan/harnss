@@ -6,6 +6,7 @@ import {
   Columns2,
   GitFork,
   Pencil,
+  Play,
   Trash2,
   MoreHorizontal,
   Loader2,
@@ -42,6 +43,7 @@ export function SessionItem({
   onArchive,
   onUnarchive,
   onFork,
+  onResume,
   onRename,
   onPinToggle,
   folders,
@@ -65,6 +67,13 @@ export function SessionItem({
    * hidden.
    */
   onFork?: () => void;
+  /**
+   * Quick-resume a CLI session — switches to the session and spawns
+   * `claude --resume <id>` without first navigating into it. Only
+   * meaningful for `engine === 'cli'`; caller passes undefined for
+   * other engines so the menu item is hidden.
+   */
+  onResume?: () => void;
   onRename: (title: string) => void;
   /** Toggle pin state. Omit if pin feature not available in this context. */
   onPinToggle?: () => void;
@@ -251,6 +260,13 @@ export function SessionItem({
             <Pencil className="me-2 h-3.5 w-3.5" />
             Rename
           </DropdownMenuItem>
+          {/* Resume is CLI-only; hidden when caller doesn't pass onResume. */}
+          {onResume && (
+            <DropdownMenuItem onClick={onResume}>
+              <Play className="me-2 h-3.5 w-3.5" />
+              Resume
+            </DropdownMenuItem>
+          )}
           {/* Fork is CLI-only; hidden when caller doesn't pass onFork. */}
           {onFork && (
             <DropdownMenuItem onClick={onFork}>

@@ -290,6 +290,25 @@ export function AppLayout() {
     [handleSelectSession, manager.sessions, projectManager.projects, setJiraBoardProjectForSpace, splitView.dismissSplitView],
   );
 
+  // Right-click "Resume" entry point on CLI sidebar rows. Switches to
+  // the session and spawns `claude --resume <id>` in one step. The
+  // main process treats `cli:resume` as idempotent, so calling this
+  // on a session that is already running just re-attaches to the
+  // existing pty without restarting it.
+  const handleResumeSidebarCliSession = useCallback(
+    (sessionId: string) => {
+      const session = manager.sessions.find((item) => item.id === sessionId);
+      if (!session || session.engine !== "cli") return;
+      const project = projectManager.projects.find((p) => p.id === session.projectId);
+      handleSidebarSelectSession(sessionId);
+      void cli.resume({
+        sessionId,
+        cwd: project?.path,
+      });
+    },
+    [cli, handleSidebarSelectSession, manager.sessions, projectManager.projects],
+  );
+
 
   useEffect(() => {
     if (!pendingSplitPaneSend) return;
@@ -1185,6 +1204,7 @@ export function AppLayout() {
               if ("error" in r) toast.error("Fork failed", { description: r.error });
             });
           },
+          onResumeSidebarCliSession: handleResumeSidebarCliSession,
         }}
       />
 
