@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { Terminal as TerminalIcon, Plus, X, Loader2 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PanelHeader } from "@/components/PanelHeader";
+import { applyMacKeybindings } from "@/lib/terminal-keybindings";
 import type { TerminalTab } from "@/hooks/useSessionTerminals";
 import type { ResolvedTheme } from "@/hooks/useTheme";
 
@@ -321,6 +322,7 @@ export function TerminalInstance({
       });
 
       term.loadAddon(fitAddon);
+      applyMacKeybindings(term);
       xtermRef.current = term;
       fitAddonRef.current = fitAddon;
       lastReportedDimsRef.current = snapshot.cols && snapshot.rows
