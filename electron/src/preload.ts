@@ -136,6 +136,7 @@ contextBridge.exposeInMainWorld("claude", {
   projects: {
     list: () => ipcRenderer.invoke("projects:list"),
     create: (spaceId?: string) => ipcRenderer.invoke("projects:create", spaceId),
+    createAtPath: (folderPath: string, spaceId?: string) => ipcRenderer.invoke("projects:create-at-path", folderPath, spaceId),
     createDev: (name: string, spaceId?: string) => ipcRenderer.invoke("projects:create-dev", name, spaceId),
     delete: (projectId: string) => ipcRenderer.invoke("projects:delete", projectId),
     rename: (projectId: string, name: string) => ipcRenderer.invoke("projects:rename", projectId, name),
@@ -166,6 +167,7 @@ contextBridge.exposeInMainWorld("claude", {
   ccSessions: {
     list: (projectPath: string) => ipcRenderer.invoke("cc-sessions:list", projectPath),
     import: (projectPath: string, ccSessionId: string) => ipcRenderer.invoke("cc-sessions:import", projectPath, ccSessionId),
+    findById: (sessionId: string) => ipcRenderer.invoke("cc-sessions:find-by-id", sessionId),
   },
   files: {
     list: (cwd: string) => ipcRenderer.invoke("files:list", cwd),

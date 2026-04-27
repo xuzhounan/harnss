@@ -18,7 +18,7 @@ interface UseAppSessionActionsInput {
   setShowSettings: (show: SettingsSection | false) => void;
   refreshAgents: () => Promise<void> | void;
   activeSpaceId: string;
-  projectManager: Pick<ProjectManagerState, "projects" | "createProject" | "createDevProject">;
+  projectManager: Pick<ProjectManagerState, "projects" | "createProject" | "createProjectAtPath" | "createDevProject">;
 }
 
 export function useAppSessionActions(input: UseAppSessionActionsInput) {
@@ -180,6 +180,59 @@ export function useAppSessionActions(input: UseAppSessionActionsInput) {
     await input.manager.importCCSession(projectId, ccSessionId);
   }, [input.manager]);
 
+  /**
+   * End-to-end import by session id — given only a Claude Code session id,
+   * locate the JSONL across ~/.claude/projects/*, read its cwd, map it to a
+   * Harnss project (creating one at that path if missing), then run the
+   * existing CC import so the session is persisted + switched to.
+   *
+   * Returns an error object so the calling dialog can display failures.
+   */
+  const handleImportSessionById = useCallback(
+    async (rawInput: string): Promise<{ ok: true; projectId: string } | { error: string }> => {
+      // Tolerant input parsing: users may paste surrounding quotes, URLs, or
+      // a prefixed label like "claude-session-xxx". Extract a UUID-shaped
+      // substring — falls through to the backend's strict check which
+      // returns a clear error if nothing UUID-like is present.
+      const uuidMatch = rawInput.match(
+        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+      );
+      const sessionId = (uuidMatch ? uuidMatch[0] : rawInput).trim();
+      if (!sessionId) return { error: "Session id is empty" };
+
+      const found = await window.claude.ccSessions.findById(sessionId);
+      if ("error" in found) return { error: found.error };
+      if (!("found" in found) || !found.found) {
+        return { error: `Session ${sessionId} not found in ~/.claude/projects` };
+      }
+
+      const rawCwd = found.cwd ?? found.cwdFallbackFromDirName;
+      if (!rawCwd) return { error: "Session file has no cwd and directory-name fallback is missing" };
+      // Normalize trailing slash / double separators so that the equality
+      // check below matches regardless of how the user originally registered
+      // the project (with or without a trailing "/"). We don't realpath —
+      // symlink divergence is rare and resolving it in the renderer would
+      // require another IPC round-trip.
+      const cwd = rawCwd.replace(/\/+$/, "");
+
+      const existing = input.projectManager.projects.find(
+        (p) => p.path.replace(/\/+$/, "") === cwd,
+      );
+      let projectId: string;
+      if (existing) {
+        projectId = existing.id;
+      } else {
+        const created = await input.projectManager.createProjectAtPath(cwd, input.activeSpaceId);
+        if ("error" in created) return { error: `Failed to create project at ${cwd}: ${created.error}` };
+        projectId = created.project.id;
+      }
+
+      await input.manager.importCCSession(projectId, found.ccSessionId);
+      return { ok: true, projectId };
+    },
+    [input.activeSpaceId, input.manager, input.projectManager],
+  );
+
   const handleSeedDevExampleSpaceData = useCallback(async () => {
     if (!import.meta.env.DEV) return;
     const { seedDevExampleSpaceData } = await import("@/lib/dev-seeding/space-seeding");
@@ -222,6 +275,7 @@ export function useAppSessionActions(input: UseAppSessionActionsInput) {
     handleUnqueueMessage,
     handleSelectSession,
     handleCreateProject,
+    handleImportSessionById,
     handleImportCCSession,
     handleSeedDevExampleSpaceData,
     handleNavigateToMessage,

@@ -31,6 +31,36 @@ function getCCProjectDir(projectPath: string): string {
   return path.join(os.homedir(), ".claude", "projects", hash);
 }
 
+/**
+ * Extract the working directory recorded in a Claude Code JSONL session file.
+ *
+ * Claude Code writes `cwd` into every session event; we return the first one
+ * we find. The enclosing directory name under ~/.claude/projects/ is derived
+ * from cwd by replacing "/" with "-", but that transform is lossy (paths that
+ * already contain "-" round-trip ambiguously), so we always read the cwd
+ * straight out of the JSONL instead of parsing the dir name.
+ */
+function extractCwdFromJsonl(filePath: string): string | null {
+  try {
+    const content = fs.readFileSync(filePath, "utf-8");
+    const lines = content.split("\n");
+    let scanned = 0;
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      if (scanned++ > 50) break;
+      try {
+        const obj = JSON.parse(line);
+        if (typeof obj.cwd === "string" && obj.cwd) return obj.cwd;
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 function extractSessionPreview(filePath: string): SessionPreview | null {
   try {
     const content = fs.readFileSync(filePath, "utf-8");
@@ -261,6 +291,56 @@ export function register(): void {
       return { messages, ccSessionId };
     } catch (err) {
       const errMsg = reportError("CC_SESSIONS:IMPORT_ERR", err);
+      return { error: errMsg };
+    }
+  });
+
+  /**
+   * Find a Claude Code session across every project by its sessionId.
+   * Returns the cwd recorded in the JSONL + a preview so the renderer can
+   * route the import to the right Harnss project (creating one if needed).
+   */
+  ipcMain.handle("cc-sessions:find-by-id", async (_event, sessionId: string) => {
+    try {
+      const trimmed = sessionId.trim();
+      if (!trimmed) return { error: "Empty session id" };
+      // Path-traversal guard: CC session ids are UUID v4. Reject anything
+      // that doesn't match the canonical shape so we never construct a
+      // `path.join(root, dir, "../something.jsonl")` from user input.
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
+        return { error: "Not a valid Claude Code session id (expected UUID)" };
+      }
+
+      const root = path.join(os.homedir(), ".claude", "projects");
+      if (!fs.existsSync(root)) return { found: false };
+
+      const subdirs = await fs.promises.readdir(root, { withFileTypes: true });
+      for (const entry of subdirs) {
+        if (!entry.isDirectory()) continue;
+        const filePath = path.join(root, entry.name, `${trimmed}.jsonl`);
+        if (!fs.existsSync(filePath)) continue;
+
+        const cwd = extractCwdFromJsonl(filePath);
+        const preview = extractSessionPreview(filePath);
+        return {
+          found: true,
+          ccSessionId: trimmed,
+          cwd,
+          // Fallback is LOSSY: reversing "/" ↔ "-" collapses any real "-" in
+          // the path. We return it only when the JSONL has no cwd field, and
+          // flag it so the UI can warn the user that the auto-resolved path
+          // may be wrong.
+          cwdFallbackFromDirName: cwd ? undefined : entry.name.replace(/-/g, "/"),
+          cwdIsApproximate: !cwd,
+          preview: preview?.firstUserMessage ?? null,
+          model: preview?.model ?? null,
+          timestamp: preview?.timestamp ?? null,
+        };
+      }
+
+      return { found: false };
+    } catch (err) {
+      const errMsg = reportError("CC_SESSIONS:FIND_BY_ID_ERR", err, { sessionId });
       return { error: errMsg };
     }
   });

@@ -162,6 +162,7 @@ declare global {
       projects: {
         list: () => Promise<Project[]>;
         create: (spaceId?: string) => Promise<Project | null>;
+        createAtPath: (folderPath: string, spaceId?: string) => Promise<{ project: Project; created: boolean } | { error: string }>;
         createDev: (name: string, spaceId?: string) => Promise<Project | null>;
         delete: (projectId: string) => Promise<IpcResult>;
         rename: (projectId: string, name: string) => Promise<IpcResult>;
@@ -203,6 +204,24 @@ declare global {
           ccSessionId?: string;
           error?: string;
         }>;
+        /**
+         * Scan ~/.claude/projects/* for a session with the given id.
+         * Returns the cwd + preview so the caller can route the import to
+         * the right Harnss project (or create one at that path).
+         */
+        findById: (sessionId: string) => Promise<
+          | { found: true;
+              ccSessionId: string;
+              cwd: string | null;
+              cwdFallbackFromDirName?: string;
+              cwdIsApproximate?: boolean;
+              preview: string | null;
+              model: string | null;
+              timestamp: string | null;
+            }
+          | { found: false }
+          | { error: string }
+        >;
       };
       files: {
         list: (cwd: string) => Promise<{ files: string[]; dirs: string[] }>;
