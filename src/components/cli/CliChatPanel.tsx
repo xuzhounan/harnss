@@ -3,7 +3,6 @@ import { Loader2, RotateCcw, Terminal as TerminalIcon, X } from "lucide-react";
 import { TerminalInstance } from "@/components/ToolsPanel";
 import type { ResolvedTheme } from "@/hooks/useTheme";
 import type { CliSessionState } from "@shared/types/cli-engine";
-import { CliComposer } from "./CliComposer";
 
 interface CliChatPanelProps {
   state: CliSessionState | null;
@@ -23,13 +22,6 @@ interface CliChatPanelProps {
   onRetry: () => void;
   /** Called when the user clicks the "Close" affordance after exit. */
   onClose: () => void;
-  /**
-   * Composer "send" — pastes raw text into the live pty followed by `\r`.
-   * No CLI-side queueing; if the pty isn't ready, we drop the call.
-   */
-  onSendToPty: (text: string) => void;
-  /** Persistence key for the composer draft (typically the session id). */
-  draftKey: string;
 }
 
 /**
@@ -47,8 +39,6 @@ export function CliChatPanel({
   onPtyDataObserved,
   onRetry,
   onClose,
-  onSendToPty,
-  draftKey,
 }: CliChatPanelProps) {
   // Subscribe to terminal:data scoped to our terminalId so we can flip
   // state.ready=true on the first chunk. This is what releases the
@@ -145,11 +135,6 @@ export function CliChatPanel({
           </button>
         </div>
       )}
-      <CliComposer
-        draftKey={draftKey}
-        disabled={state.status !== "running"}
-        onSubmit={onSendToPty}
-      />
     </div>
   );
 }
