@@ -173,6 +173,7 @@ contextBridge.exposeInMainWorld("claude", {
   cli: {
     start: (opts: unknown) => ipcRenderer.invoke("cli:start", opts),
     resume: (opts: unknown) => ipcRenderer.invoke("cli:resume", opts),
+    fork: (opts: unknown) => ipcRenderer.invoke("cli:fork", opts),
     stop: (sessionId: string) => ipcRenderer.invoke("cli:stop", sessionId),
     listLive: () => ipcRenderer.invoke("cli:list-live"),
     getLive: (sessionId: string) => ipcRenderer.invoke("cli:get-live", sessionId),

@@ -312,6 +312,92 @@ export function useAppSessionActions(input: UseAppSessionActionsInput) {
     [input.activeSpaceId, input.manager, input.projectManager],
   );
 
+  /**
+   * Fork an existing CC session: spawns `claude --resume <orig> --fork-session`
+   * which clones the transcript under a fresh CLI-minted session id. The new
+   * id is discovered asynchronously via fs.watch in main; the sidebar row
+   * starts under a provisional id and rekeys when the real one arrives.
+   */
+  const handleForkCliSessionById = useCallback(
+    async (
+      originalSessionId: string,
+    ): Promise<{ ok: true; provisionalSessionId: string } | { error: string }> => {
+      const found = await window.claude.ccSessions.findById(originalSessionId);
+      if ("error" in found) return { error: found.error };
+      if (!("found" in found) || !found.found) {
+        return { error: `Session ${originalSessionId} not found in ~/.claude/projects` };
+      }
+      const rawCwd = found.cwd ?? found.cwdFallbackFromDirName;
+      if (!rawCwd) return { error: "Session has no cwd recorded" };
+      const cwd = rawCwd.replace(/\/+$/, "");
+
+      const existing = input.projectManager.projects.find(
+        (p) => p.path.replace(/\/+$/, "") === cwd,
+      );
+      let projectId: string;
+      if (existing) {
+        projectId = existing.id;
+      } else {
+        const created = await input.projectManager.createProjectAtPath(cwd, input.activeSpaceId);
+        if ("error" in created) return { error: `Failed to create project at ${cwd}: ${created.error}` };
+        projectId = created.project.id;
+      }
+
+      // Spawn first so we have a provisional id to bind the sidebar row
+      // to. cli.fork resolves once the pty is up; the real id arrives
+      // later via session_identified → manager.rekeyCliSession.
+      const cliResult = await window.claude.cli.fork({
+        originalSessionId: found.ccSessionId,
+        cwd,
+      });
+      if (!cliResult.ok) return { error: cliResult.error };
+
+      const createResult = await input.manager.createCliSession(
+        projectId,
+        cliResult.sessionId,
+        cwd,
+      );
+      if ("error" in createResult) {
+        // Fork pty already running but Harnss row creation failed —
+        // tear down the pty so we don't leak it.
+        await window.claude.cli.stop(cliResult.sessionId).catch(() => { /* ok */ });
+        return { error: createResult.error };
+      }
+      return { ok: true, provisionalSessionId: cliResult.sessionId };
+    },
+    [input.activeSpaceId, input.manager, input.projectManager],
+  );
+
+  /**
+   * Archive a CC session that's not currently in the sidebar (or even
+   * one that is — caller decides). Routes through `cli:archive` IPC
+   * which moves the JSONL into the cwd's `.archived/` subdirectory.
+   * Existing sidebar `archiveSession` handles in-app rows; this helper
+   * is for the global session browser case.
+   */
+  const handleArchiveCliSessionById = useCallback(
+    async (sessionId: string): Promise<{ ok: true } | { error: string }> => {
+      const found = await window.claude.ccSessions.findById(sessionId);
+      if ("error" in found) return { error: found.error };
+      if (!("found" in found) || !found.found) {
+        return { error: `Session ${sessionId} not found in ~/.claude/projects` };
+      }
+      const rawCwd = found.cwd ?? found.cwdFallbackFromDirName;
+      if (!rawCwd) return { error: "Session has no cwd recorded" };
+      // Pass cwd (not the hash) — main derives the canonical project dir
+      // itself so the renderer doesn't have to mirror Claude's encoding
+      // rules. If Claude changes hash semantics, only main needs the
+      // patch.
+      const result = await window.claude.cli.archive({
+        sessionId: found.ccSessionId,
+        cwd: rawCwd.replace(/\/+$/, ""),
+      });
+      if (!result.ok) return { error: result.error ?? "Archive failed" };
+      return { ok: true };
+    },
+    [],
+  );
+
   const handleSeedDevExampleSpaceData = useCallback(async () => {
     if (!import.meta.env.DEV) return;
     const { seedDevExampleSpaceData } = await import("@/lib/dev-seeding/space-seeding");
@@ -356,6 +442,8 @@ export function useAppSessionActions(input: UseAppSessionActionsInput) {
     handleCreateProject,
     handleImportSessionById,
     handleResumeCliSessionById,
+    handleForkCliSessionById,
+    handleArchiveCliSessionById,
     handleImportCCSession,
     handleSeedDevExampleSpaceData,
     handleNavigateToMessage,

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, FileText, Globe, GitBranch, MessagesSquare, RefreshCw, Search } from "lucide-react";
+import { Archive, ChevronDown, ChevronRight, FileText, GitFork, Globe, GitBranch, MessagesSquare, RefreshCw, Search } from "lucide-react";
 
 interface AllSessionsEntry {
   sessionId: string;
@@ -23,6 +23,22 @@ interface AllSessionsSectionProps {
   onResumeCliSessionById: (
     sessionId: string,
   ) => Promise<{ ok: true; projectId: string; sessionId: string } | { error: string }>;
+  /**
+   * Fork an existing session — spawns `claude --resume <id> --fork-session`
+   * which clones the transcript under a fresh CLI-minted id. Useful when
+   * the user wants to "what if" a past conversation without polluting
+   * the original.
+   */
+  onForkCliSessionById: (
+    sessionId: string,
+  ) => Promise<{ ok: true; provisionalSessionId: string } | { error: string }>;
+  /**
+   * Move a session's JSONL into the cwd's `.archived/` subdirectory.
+   * Doesn't touch any in-app sidebar row — caller should refresh after.
+   */
+  onArchiveCliSessionById: (
+    sessionId: string,
+  ) => Promise<{ ok: true } | { error: string }>;
   /**
    * Static-history fallback: imports the JSONL transcript into a Harnss
    * SDK session so the messages are browseable but not continuable.
@@ -68,6 +84,8 @@ function formatRelative(ms: number): string {
  */
 export function AllSessionsSection({
   onResumeCliSessionById,
+  onForkCliSessionById,
+  onArchiveCliSessionById,
   onImportSessionById,
 }: AllSessionsSectionProps) {
   const [expanded, setExpanded] = useState(false);
@@ -239,19 +257,59 @@ export function AllSessionsSection({
                     </span>
                   </span>
                 </button>
-                {/* Secondary action — import as static SDK history */}
-                <button
-                  type="button"
-                  disabled={isPending}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void runAction(() => onImportSessionById(entry.sessionId));
-                  }}
-                  title="View as static history (SDK import, no CLI process)"
-                  className="flex w-7 shrink-0 items-center justify-center text-sidebar-foreground/35 opacity-0 transition-opacity hover:text-sidebar-foreground/70 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-sidebar-foreground/30 disabled:opacity-30 group-hover:opacity-100"
-                >
-                  <FileText className="h-3 w-3" />
-                </button>
+                {/* Hover action cluster: fork / archive / SDK import.
+                   Three secondary actions are tight on space — order
+                   left-to-right by frequency. */}
+                <div className="flex shrink-0 items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                  <button
+                    type="button"
+                    disabled={isPending}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void runAction(() => onForkCliSessionById(entry.sessionId));
+                    }}
+                    title="Fork — clone transcript under a new session id"
+                    className="flex h-7 w-7 items-center justify-center text-sidebar-foreground/35 hover:text-sidebar-foreground/70 focus-visible:outline focus-visible:outline-1 focus-visible:outline-sidebar-foreground/30 disabled:opacity-30"
+                  >
+                    <GitFork className="h-3 w-3" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isPending}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void runAction(async () => {
+                        const r = await onArchiveCliSessionById(entry.sessionId);
+                        // On success, drop the archived row from local
+                        // entries so the list reflects disk state without
+                        // needing a manual refresh. On failure, leave the
+                        // row visible so the user can retry.
+                        if ("ok" in r && r.ok && entries) {
+                          setEntries(entries.filter(
+                            (x) => !(x.sessionId === entry.sessionId && x.cwdHash === entry.cwdHash),
+                          ));
+                        }
+                        return r;
+                      });
+                    }}
+                    title="Archive — move transcript to .archived/"
+                    className="flex h-7 w-7 items-center justify-center text-sidebar-foreground/35 hover:text-sidebar-foreground/70 focus-visible:outline focus-visible:outline-1 focus-visible:outline-sidebar-foreground/30 disabled:opacity-30"
+                  >
+                    <Archive className="h-3 w-3" />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isPending}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void runAction(() => onImportSessionById(entry.sessionId));
+                    }}
+                    title="View as static history (SDK import, no CLI process)"
+                    className="flex h-7 w-7 items-center justify-center text-sidebar-foreground/35 hover:text-sidebar-foreground/70 focus-visible:outline focus-visible:outline-1 focus-visible:outline-sidebar-foreground/30 disabled:opacity-30"
+                  >
+                    <FileText className="h-3 w-3" />
+                  </button>
+                </div>
               </div>
             );
           })}
