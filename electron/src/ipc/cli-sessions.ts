@@ -21,6 +21,69 @@ import type {
 } from "@shared/types/cli-engine";
 
 /**
+ * Discover the new session id minted by `claude --fork-session`. Polls
+ * the cwd's project dir as the source of truth (catches files created
+ * during the gap between snapshot and watch attach, plus survives
+ * coalesced fs.watch events) and uses fs.watch only as a wake-up to
+ * shorten poll latency. Resolves with the discovered id or null on
+ * timeout.
+ */
+function watchForkSessionId(
+  cwd: string,
+  preExistingIds: Set<string>,
+  timeoutMs = 30_000,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const dir = path.join(os.homedir(), ".claude", "projects", cwd.replace(/\//g, "-"));
+    let settled = false;
+    let watcher: fs.FSWatcher | null = null;
+    let pollInterval: NodeJS.Timeout | null = null;
+    let timeoutHandle: NodeJS.Timeout | null = null;
+
+    const finish = (id: string | null) => {
+      if (settled) return;
+      settled = true;
+      if (pollInterval) clearInterval(pollInterval);
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      try { watcher?.close(); } catch { /* ignore */ }
+      resolve(id);
+    };
+
+    const scan = () => {
+      if (settled) return;
+      try {
+        if (!fs.existsSync(dir)) return;
+        for (const f of fs.readdirSync(dir)) {
+          if (!f.endsWith(".jsonl")) continue;
+          const id = f.slice(0, -6);
+          if (preExistingIds.has(id)) continue;
+          finish(id);
+          return;
+        }
+      } catch {
+        /* permission / transient error — try again next tick */
+      }
+    };
+
+    // Polling is the source of truth — fires every 500ms, picks up
+    // anything fs.watch missed.
+    pollInterval = setInterval(scan, 500);
+    // fs.watch wakes us up sooner when the dir exists; failure to
+    // attach (dir missing, EACCES) is fine because polling still
+    // covers it.
+    try {
+      if (fs.existsSync(dir)) {
+        watcher = fs.watch(dir, { persistent: false }, scan);
+      }
+    } catch { /* polling will handle it */ }
+    // Initial scan — covers the race where CLI wrote the file before
+    // we even got here.
+    scan();
+    timeoutHandle = setTimeout(() => finish(null), timeoutMs);
+  });
+}
+
+/**
  * CLI engine — spawns the official `claude` binary in a pty per session and
  * surfaces lifecycle events to the renderer. Bytes flow through the existing
  * `terminal:data` channel by registering each spawned pty into the same
@@ -369,36 +432,153 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
     };
   });
 
+  /**
+   * Fork an existing session: spawn `claude --resume <orig> --fork-session`
+   * which prompts CLI to clone the transcript under a fresh session id it
+   * mints itself. We can't know the new id at spawn time, so the renderer
+   * gets a provisional id back; main fs.watches the cwd's project dir for
+   * the new .jsonl file and emits `session_identified` once the real id
+   * shows up (typically after the first user turn).
+   *
+   * The original live session (if any) is untouched — fork is non-
+   * destructive by design.
+   */
+  ipcMain.handle("cli:fork", async (_event, opts: { originalSessionId: string; cwd: string; cols?: number; rows?: number }): Promise<CliStartResult> => {
+    try {
+      if (!opts?.originalSessionId || !opts?.cwd) {
+        return { ok: false, sessionId: opts?.originalSessionId ?? "", error: "originalSessionId and cwd required" };
+      }
+      const pty = getPty();
+      const cols = opts.cols ?? 80;
+      const rows = opts.rows ?? 24;
+      const args = ["--resume", opts.originalSessionId, "--fork-session", "--add-dir", opts.cwd];
+      const claudePath = resolveClaudeBinary();
+
+      // Snapshot the current set of session ids in this cwd's project dir
+      // so we can spot the new file once CLI writes it.
+      const projectDir = path.join(os.homedir(), ".claude", "projects", opts.cwd.replace(/\//g, "-"));
+      const preExistingIds = new Set<string>();
+      try {
+        if (fs.existsSync(projectDir)) {
+          for (const f of fs.readdirSync(projectDir)) {
+            if (f.endsWith(".jsonl")) preExistingIds.add(f.slice(0, -6));
+          }
+        }
+      } catch { /* fine — empty set means we accept any id we see */ }
+
+      let ptyProcess: PtySpawnedShape;
+      try {
+        ptyProcess = pty.spawn(claudePath, args, {
+          name: "xterm-256color",
+          cols,
+          rows,
+          cwd: opts.cwd,
+          env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" },
+        }) as PtySpawnedShape;
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        return { ok: false, sessionId: opts.originalSessionId, error: errMsg };
+      }
+
+      // Use a temporary id while we wait for CLI to mint the real one.
+      // Renderer keys its CliSessionState off this; session_identified
+      // event triggers the rekey to the real id once watcher fires.
+      const provisionalId = `fork-pending-${crypto.randomUUID()}`;
+      const pid = ptyProcess.pid ?? -1;
+      const terminalId = crypto.randomUUID();
+
+      const live: LiveCliSession = {
+        sessionId: provisionalId,
+        provisionalSessionId: provisionalId,
+        terminalId,
+        pid,
+        cwd: opts.cwd,
+        startedAt: Date.now(),
+      };
+      liveSessions.set(provisionalId, live);
+
+      adoptCliPty(ptyProcess, provisionalId, terminalId, cols, rows, getMainWindow, (code, signal) => {
+        // Resolve the *current* sessionId off the mutable live entry.
+        // session_identified may have rekey'd the entry from
+        // provisionalId → realId between spawn and exit; closing over
+        // provisionalId would otherwise emit a dead-letter exit event
+        // and leak the live entry under realId.
+        const currentId = live.sessionId;
+        const current = liveSessions.get(currentId);
+        if (current && current.terminalId === terminalId) liveSessions.delete(currentId);
+        const evt: CliSessionEvent = {
+          type: "exited",
+          terminalId,
+          sessionId: currentId,
+          code,
+          signal,
+        };
+        safeSend(getMainWindow, "cli:event", evt);
+      });
+
+      // Kick off the discovery watcher async — don't block the IPC.
+      void (async () => {
+        const realId = await watchForkSessionId(opts.cwd, preExistingIds);
+        if (!realId) {
+          log("CLI", `cli:fork: real id discovery timed out for provisional=${provisionalId.slice(0, 12)}`);
+          return;
+        }
+        // Rekey liveSessions: the entry now lives under realId so
+        // subsequent IPC (cli:get-live, cli:stop) addressed at realId
+        // resolves correctly. Provisional id stays as a dead-letter so
+        // any in-flight events for it don't crash.
+        const entry = liveSessions.get(provisionalId);
+        if (entry && !liveSessions.has(realId)) {
+          entry.sessionId = realId;
+          liveSessions.delete(provisionalId);
+          liveSessions.set(realId, entry);
+        }
+        const evt: CliSessionEvent = {
+          type: "session_identified",
+          terminalId,
+          provisionalSessionId: provisionalId,
+          sessionId: realId,
+        };
+        safeSend(getMainWindow, "cli:event", evt);
+        log("CLI", `cli:fork identified ${realId.slice(0, 8)} from provisional=${provisionalId.slice(0, 12)}`);
+      })();
+
+      log("CLI", `cli:fork from=${opts.originalSessionId.slice(0, 8)} provisional=${provisionalId.slice(0, 12)} pid=${pid}`);
+      const evt: CliSessionEvent = { type: "resumed", terminalId, sessionId: provisionalId, pid };
+      safeSend(getMainWindow, "cli:event", evt);
+
+      return { ok: true, terminalId, sessionId: provisionalId, pid };
+    } catch (err) {
+      const errMsg = reportError("CLI:FORK_ERR", err);
+      return { ok: false, sessionId: opts?.originalSessionId ?? "", error: errMsg };
+    }
+  });
+
   ipcMain.handle("cli:archive", async (_event, target: CliArchiveTarget): Promise<{ ok: boolean; error?: string }> => {
     try {
-      if (!target?.sessionId || !target?.cwdHash) {
-        return { ok: false, error: "sessionId and cwdHash required" };
+      if (!target?.sessionId || !target?.cwd) {
+        return { ok: false, error: "sessionId and cwd required" };
       }
       // Untrusted-input guards before composing any filesystem path:
-      //   - cwdHash must be a single path segment (no separators, no '..')
+      //   - cwd must be an absolute path (no relative escapes)
       //   - sessionId must be UUID-shaped (CLI's own format)
-      // Either of these slipping past would let the renderer compose paths
-      // outside ~/.claude/projects.
-      if (
-        target.cwdHash.includes("/") ||
-        target.cwdHash.includes("\\") ||
-        target.cwdHash === "." ||
-        target.cwdHash === ".." ||
-        target.cwdHash.startsWith(".")
-      ) {
-        return { ok: false, error: "Invalid cwdHash" };
+      // Main derives the cwdHash itself instead of trusting the renderer
+      // — single source of truth for path encoding.
+      if (!path.isAbsolute(target.cwd)) {
+        return { ok: false, error: "cwd must be absolute" };
       }
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(target.sessionId)) {
         return { ok: false, error: "Invalid sessionId" };
       }
+      const cwdHash = target.cwd.replace(/\/+$/, "").replace(/\//g, "-");
       // Phase 1 ships archive as a rename-only operation pending verification
       // of how CLI 2.1.x rebuilds sessions-index.json. See cli-engine-api.md
       // for the deferred decision.
       const projectsRoot = path.resolve(path.join(os.homedir(), ".claude", "projects"));
-      const root = path.join(projectsRoot, target.cwdHash);
+      const root = path.join(projectsRoot, cwdHash);
       const src = target.fullPath ?? path.join(root, `${target.sessionId}.jsonl`);
       const archiveDir = path.join(root, ".archived");
-      const dst = path.join(archiveDir, `${target.sessionId}.jsonl`);
+      let dst = path.join(archiveDir, `${target.sessionId}.jsonl`);
 
       // Validate every resolved path is inside ~/.claude/projects/{cwdHash}/.
       // path.relative returns a string starting with "../" when the
@@ -421,8 +601,17 @@ export function register(getMainWindow: () => BrowserWindow | null): void {
       }
 
       await fs.promises.mkdir(archiveDir, { recursive: true });
+      // Don't clobber existing archived transcripts on re-archive races —
+      // append a numeric suffix until a free name is found. A repeated
+      // archive call shouldn't silently destroy a previously archived
+      // copy.
+      if (fs.existsSync(dst)) {
+        let n = 1;
+        while (fs.existsSync(path.join(archiveDir, `${target.sessionId}.${n}.jsonl`))) n++;
+        dst = path.join(archiveDir, `${target.sessionId}.${n}.jsonl`);
+      }
       await fs.promises.rename(src, dst);
-      log("CLI", `cli:archive moved ${target.sessionId.slice(0, 8)} → .archived/`);
+      log("CLI", `cli:archive moved ${target.sessionId.slice(0, 8)} → ${path.relative(root, dst)}`);
       return { ok: true };
     } catch (err) {
       const errMsg = reportError("CLI:ARCHIVE_ERR", err);

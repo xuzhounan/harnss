@@ -15,6 +15,14 @@ interface UseCliSessionInput {
    * uniform.
    */
   activeSessionId: string | null;
+  /**
+   * Called when CLI mints a real session id for a fork (the provisional
+   * id we sent to the sidebar gets replaced). Implementor should rekey
+   * its sidebar/session-store entry from `provisionalId` → `realId`.
+   * Skipping this means the sidebar row stays under the provisional id
+   * forever, which makes resume/delete/archive break.
+   */
+  onSessionIdentified?: (provisionalId: string, realId: string) => void;
 }
 
 const INITIAL_STATE: CliSessionState = {
@@ -38,7 +46,9 @@ const INITIAL_STATE: CliSessionState = {
  * deliberately gives up structured chat state in exchange for full TUI
  * fidelity.
  */
-export function useCliSession({ activeSessionId }: UseCliSessionInput) {
+export function useCliSession({ activeSessionId, onSessionIdentified }: UseCliSessionInput) {
+  const onSessionIdentifiedRef = useRef(onSessionIdentified);
+  onSessionIdentifiedRef.current = onSessionIdentified;
   const [state, setState] = useState<CliSessionState | null>(null);
   const stateRef = useRef<CliSessionState | null>(null);
   stateRef.current = state;
@@ -96,6 +106,12 @@ export function useCliSession({ activeSessionId }: UseCliSessionInput) {
   // started in another window/tab can't overwrite our state. Without this,
   // a stray cli:event would clobber the panel.
   //
+  // Exception: `session_identified` (fork id discovery) must always run
+  // its `onSessionIdentified` callback, even when the user has switched
+  // away from the forking session — otherwise the sidebar row stays
+  // pinned to the provisional id forever. Local state update still
+  // requires the active-session match.
+  //
   // Filter checks against three sources, ordered most-eager first:
   //   1. intendedSessionIdRef — set synchronously by start/resume before
   //      the IPC promise resolves; covers the early-event race where an
@@ -106,6 +122,14 @@ export function useCliSession({ activeSessionId }: UseCliSessionInput) {
   //      backstop on remount when stateRef has been wiped.
   useEffect(() => {
     const unsubscribe = window.claude.cli.onEvent((event: CliSessionEvent) => {
+      // Fork id discovery is global by intent — let the manager rekey
+      // the sidebar row regardless of which session is active.
+      if (event.type === "session_identified") {
+        queueMicrotask(() => {
+          onSessionIdentifiedRef.current?.(event.provisionalSessionId, event.sessionId);
+        });
+      }
+
       const idsToMatch = new Set<string>();
       if (intendedSessionIdRef.current) idsToMatch.add(intendedSessionIdRef.current);
       if (stateRef.current?.sessionId) idsToMatch.add(stateRef.current.sessionId);
@@ -140,7 +164,10 @@ export function useCliSession({ activeSessionId }: UseCliSessionInput) {
               ready: prev?.ready ?? false,
             };
           case "session_identified":
-            // Forked session got its real id — rekey local state.
+            // Local state rekey — the global onSessionIdentified call
+            // happens earlier in this handler, outside the active-session
+            // filter, so this branch is purely about updating the
+            // currently-shown panel.
             if (!prev) return prev;
             return { ...prev, sessionId: event.sessionId };
           case "spawn_failed":

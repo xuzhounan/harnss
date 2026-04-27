@@ -93,8 +93,14 @@ export function AppLayout() {
   } = managers;
   // CLI engine has its own xterm-based chat surface — kept out of
   // useAppOrchestrator deliberately so SDK / ACP / Codex paths remain
-  // unaffected. We only feed it the active session id.
-  const cli = useCliSession({ activeSessionId: manager.activeSessionId });
+  // unaffected. We only feed it the active session id and a hook back
+  // into the session manager for fork-id discovery.
+  const cli = useCliSession({
+    activeSessionId: manager.activeSessionId,
+    onSessionIdentified: (provisionalId, realId) => {
+      void manager.rekeyCliSession(provisionalId, realId);
+    },
+  });
   const isCliEngine = manager.activeSession?.engine === "cli";
   const handleCliRetry = useCallback(() => {
     const session = manager.activeSession;
@@ -153,7 +159,7 @@ export function AppLayout() {
     handleModelChange, handlePermissionModeChange, handlePlanModeChange,
     handleClaudeModelEffortChange, handleAgentWorktreeChange, handleStop, handleSelectSession,
     handleSendQueuedNow, handleUnqueueMessage, handleCreateProject, handleImportCCSession, handleImportSessionById,
-    handleResumeCliSessionById,
+    handleResumeCliSessionById, handleForkCliSessionById, handleArchiveCliSessionById,
     handleNavigateToMessage, handleStartCreateSpace, handleConfirmCreateSpace, handleCancelCreateSpace,
     handleUpdateSpace, handleDeleteSpace, handleMoveProjectToSpace, handleSeedDevExampleSpaceData,
   } = actions;
@@ -1137,6 +1143,8 @@ export function AppLayout() {
           onImportCCSession: handleImportCCSession,
           onImportSessionById: handleImportSessionById,
           onResumeCliSessionById: handleResumeCliSessionById,
+          onForkCliSessionById: handleForkCliSessionById,
+          onArchiveCliSessionById: handleArchiveCliSessionById,
           onToggleSidebar: sidebar.toggle,
           onNavigateToMessage: handleNavigateToMessage,
           onMoveProjectToSpace: handleMoveProjectToSpace,

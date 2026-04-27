@@ -91,6 +91,7 @@ export function useSessionLifecycle({
   const {
     createSession,
     createCliSession,
+    rekeyCliSession,
     switchSession,
     deleteSession,
     archiveSession,
@@ -357,6 +358,7 @@ export function useSessionLifecycle({
   return {
     createSession,
     createCliSession,
+    rekeyCliSession,
     switchSession,
     deleteSession,
     archiveSession,

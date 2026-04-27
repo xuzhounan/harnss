@@ -5,10 +5,11 @@ import { suppressNextSessionCompletion } from "../../lib/notification-utils";
 import { capture, reportError } from "../../lib/analytics/analytics";
 import { bgAgentStore } from "../../lib/background/agent-store";
 import { useSettingsStore } from "@/stores/settings-store";
-import { notifySessionTerminalsDestroyed } from "@/hooks/useSessionTerminals";
+import { notifySessionTerminalsDestroyed, notifySessionTerminalsRemap } from "@/hooks/useSessionTerminals";
 import {
   deleteBrowserSession,
   makeSessionBrowserPersistKey,
+  renameBrowserSession,
 } from "@/components/browser/browser-utils";
 import { clearAllComposerStateForSession } from "@/lib/composer-draft-storage";
 import {
@@ -629,17 +630,27 @@ export function useSessionCrud({
     // React-side messages list — so this is the only chance to write the
     // engine tag. Without it, the persisted row reloads as a default
     // (Claude SDK) session and the routing in AppLayout breaks on restart.
-    const persisted = {
-      id: sessionId,
-      projectId,
-      title: newSession.title,
-      createdAt: now,
-      messages: [],
-      totalCost: 0,
-      engine: "cli" as const,
-    };
-    await window.claude.sessions.save(persisted);
-    cacheSessionPayload(persisted);
+    //
+    // Exception: provisional fork ids ("fork-pending-...") aren't
+    // persisted. Their lifetime is bounded by `session_identified` →
+    // rekeyCliSession, which writes the real id to disk and discards
+    // the in-memory provisional row. Persisting the provisional row
+    // would leave stale entries on disk if the user quits Harnss before
+    // the fork id is discovered.
+    const isProvisional = sessionId.startsWith("fork-pending-");
+    if (!isProvisional) {
+      const persisted = {
+        id: sessionId,
+        projectId,
+        title: newSession.title,
+        createdAt: now,
+        messages: [],
+        totalCost: 0,
+        engine: "cli" as const,
+      };
+      await window.claude.sessions.save(persisted);
+      cacheSessionPayload(persisted);
+    }
 
     setSessions((prev) => [
       newSession,
@@ -665,9 +676,85 @@ export function useSessionCrud({
     setSessions,
   ]);
 
+  /**
+   * Rename a CLI session from a provisional id (used during fork while
+   * waiting for CLI to mint the real one) to the discovered real id.
+   * Handles every place the id is keyed on:
+   *
+   *   - sessions list (sidebar row)
+   *   - sessions.json on disk (delete old + save new)
+   *   - active session pointer if this is the current one
+   *   - in-memory PersistedSession cache (evict provisional)
+   *   - per-session settings store (terminal/browser/files state)
+   *   - terminal pty ownership (notify renderer + main remap)
+   *   - browser persisted tab state
+   *
+   * No-op when the provisional id can't be found in the sidebar or the
+   * real id already exists (caller may race with us).
+   */
+  const rekeyCliSession = useCallback(async (
+    provisionalId: string,
+    realId: string,
+  ): Promise<{ ok: true } | { error: string }> => {
+    if (provisionalId === realId) return { ok: true };
+    const session = sessionsRef.current.find((s) => s.id === provisionalId);
+    if (!session) return { error: `Provisional session ${provisionalId} not found` };
+    if (sessionsRef.current.some((s) => s.id === realId)) {
+      // Real id already in sidebar — drop the provisional row + state.
+      setSessions((prev) => prev.filter((s) => s.id !== provisionalId));
+      evictFromCache(provisionalId);
+      return { ok: true };
+    }
+    const renamed: ChatSession = { ...session, id: realId };
+    setSessions((prev) => prev.map((s) => (s.id === provisionalId ? renamed : s)));
+    if (activeSessionIdRef.current === provisionalId) {
+      setActiveSessionId(realId);
+    }
+    // Migrate every keyed bucket from provisional → real id. Using the
+    // existing remap helpers keeps us consistent with the draft → real
+    // session flow that already lives in materializeDraft.
+    evictFromCache(provisionalId);
+    useSettingsStore.getState().remapSessionSettings(provisionalId, realId);
+    notifySessionTerminalsRemap(provisionalId, realId);
+    void window.claude.terminal.remapSession(provisionalId, realId).catch((err) => {
+      reportError("CLI_REKEY_TERMINAL_REMAP", err);
+    });
+    renameBrowserSession(
+      makeSessionBrowserPersistKey(provisionalId),
+      makeSessionBrowserPersistKey(realId),
+    );
+    // Persist under the new id (provisional was never persisted —
+    // createCliSession skips persist for fork-pending-* ids — so we
+    // don't need to delete an old file here, just create the new one).
+    try {
+      await window.claude.sessions.save({
+        id: realId,
+        projectId: session.projectId,
+        title: session.title,
+        createdAt: session.createdAt,
+        messages: [],
+        totalCost: 0,
+        engine: "cli" as const,
+      });
+      cacheSessionPayload({
+        id: realId,
+        projectId: session.projectId,
+        title: session.title,
+        createdAt: session.createdAt,
+        messages: [],
+        totalCost: 0,
+        engine: "cli",
+      });
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+    return { ok: true };
+  }, [activeSessionIdRef, cacheSessionPayload, evictFromCache, sessionsRef, setActiveSessionId, setSessions]);
+
   return {
     createSession,
     createCliSession,
+    rekeyCliSession,
     switchSession,
     deleteSession,
     archiveSession,

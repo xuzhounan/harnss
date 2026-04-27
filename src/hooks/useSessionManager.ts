@@ -312,6 +312,7 @@ export function useSessionManager(
   const {
     createSession,
     createCliSession,
+    rekeyCliSession,
     switchSession,
     deleteSession,
     archiveSession,
@@ -562,6 +563,7 @@ export function useSessionManager(
     draftProjectId,
     createSession,
     createCliSession,
+    rekeyCliSession,
     switchSession,
     deselectSession,
     deleteSession,

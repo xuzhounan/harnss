@@ -122,6 +122,14 @@ interface AppSidebarProjectActions {
   onResumeCliSessionById: (
     sessionId: string,
   ) => Promise<{ ok: true; projectId: string; sessionId: string } | { error: string }>;
+  /** Fork an existing CC session to a new CLI-minted id. */
+  onForkCliSessionById: (
+    sessionId: string,
+  ) => Promise<{ ok: true; provisionalSessionId: string } | { error: string }>;
+  /** Archive a CC session (move JSONL to .archived/). */
+  onArchiveCliSessionById: (
+    sessionId: string,
+  ) => Promise<{ ok: true } | { error: string }>;
   onToggleSidebar: () => void;
   onNavigateToMessage: (sessionId: string, messageId: string) => void;
   onMoveProjectToSpace: (projectId: string, spaceId: string) => void;
@@ -198,6 +206,8 @@ export const AppSidebar = memo(function AppSidebar({
     onImportCCSession,
     onImportSessionById,
     onResumeCliSessionById,
+    onForkCliSessionById,
+    onArchiveCliSessionById,
     onToggleSidebar,
     onNavigateToMessage,
     onMoveProjectToSpace,
@@ -751,6 +761,8 @@ export const AppSidebar = memo(function AppSidebar({
 
                 <AllSessionsSection
                   onResumeCliSessionById={onResumeCliSessionById}
+                  onForkCliSessionById={onForkCliSessionById}
+                  onArchiveCliSessionById={onArchiveCliSessionById}
                   onImportSessionById={onImportSessionById}
                 />
               </div>
