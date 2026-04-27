@@ -130,6 +130,7 @@ export function AppLayout() {
   const layoutUI = useAppLayoutUIState({
     isNativeGlass,
     onHideSettings: () => setShowSettings(false),
+    activeSessionId: manager.activeSessionId,
   });
   const {
     windowFocused,
