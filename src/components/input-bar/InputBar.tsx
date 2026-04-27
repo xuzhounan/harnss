@@ -95,6 +95,58 @@ function sanitizeDraftHtml(raw: string): string {
   });
 }
 
+/**
+ * Versioned blob format for per-session composer drafts. v1 carries text
+ * (innerHTML) and image attachments; future fields can be added without
+ * breaking older readers via the version tag.
+ *
+ * Reads also accept the legacy schema (raw HTML string written by the v0
+ * implementation) so existing drafts survive the upgrade.
+ */
+const DRAFT_BLOB_VERSION = 1;
+interface DraftBlobV1 {
+  v: 1;
+  html: string;
+  attachments: ImageAttachment[];
+}
+
+const VALID_MEDIA_TYPES: ReadonlySet<ImageAttachment["mediaType"]> = new Set([
+  "image/png", "image/jpeg", "image/gif", "image/webp",
+]);
+
+function isValidAttachment(value: unknown): value is ImageAttachment {
+  if (!value || typeof value !== "object") return false;
+  const a = value as Record<string, unknown>;
+  return typeof a.id === "string"
+    && typeof a.data === "string"
+    && typeof a.mediaType === "string"
+    && VALID_MEDIA_TYPES.has(a.mediaType as ImageAttachment["mediaType"]);
+}
+
+/**
+ * Parse a stored draft blob, accepting both v1 JSON and the legacy raw-HTML
+ * schema. Always returns a normalized DraftBlobV1; arbitrary input that fails
+ * validation collapses to an empty draft.
+ */
+function parseDraftBlob(raw: string): DraftBlobV1 {
+  if (!raw) return { v: 1, html: "", attachments: [] };
+  // Try v1 JSON first
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && parsed.v === 1) {
+      const html = typeof parsed.html === "string" ? parsed.html : "";
+      const attachments = Array.isArray(parsed.attachments)
+        ? parsed.attachments.filter(isValidAttachment)
+        : [];
+      return { v: 1, html, attachments };
+    }
+  } catch {
+    // Not JSON — fall through to legacy raw-HTML interpretation
+  }
+  // Legacy v0: raw HTML string only
+  return { v: 1, html: raw, attachments: [] };
+}
+
 export interface InputBarProps {
   onSend: (text: string, images?: ImageAttachment[], displayText?: string) => void;
   onClear?: () => void | Promise<void>;
@@ -314,6 +366,12 @@ export const InputBar = memo(function InputBar({
   // - Write-lease: if another InputBar is already editing this draftKey, we
   //   read storage but never write back, so the primary composer stays the
   //   single source of truth.
+  // Mirror attachments into a ref so the cleanup function can read the latest
+  // value when it runs — captured-at-mount state would always serialize the
+  // empty array.
+  const attachmentsRef = useRef<ImageAttachment[]>(attachments);
+  attachmentsRef.current = attachments;
+
   useEffect(() => {
     if (!draftKey) return;
     const el = editableRef.current;
@@ -325,35 +383,45 @@ export const InputBar = memo(function InputBar({
     try {
       const stored = localStorage.getItem(draftStorageKey(draftKey));
       if (stored && stored.length > 0) {
+        const blob = parseDraftBlob(stored);
         // Sanitize before innerHTML: the blob comes out of localStorage,
         // which any devtools user / extension could have written. Strip
         // event handlers / unexpected tags so we never execute tampered
         // scripts just by restoring a draft.
-        el.innerHTML = sanitizeDraftHtml(stored);
+        el.innerHTML = sanitizeDraftHtml(blob.html);
         const hasText = Boolean(el.textContent?.trim());
         hasContentRef.current = hasText;
-        setHasContent(hasText);
+        setHasContent(hasText || blob.attachments.length > 0);
+        setAttachments(blob.attachments);
       } else {
-        // New session has no saved draft — clear the DOM so leftover text
-        // from the previous session's composer doesn't appear here.
+        // New session has no saved draft — reset both the DOM and the
+        // attachments state so nothing from the previous session lingers.
         el.innerHTML = "";
         hasContentRef.current = false;
         setHasContent(false);
+        setAttachments([]);
       }
     } catch { /* ignore — fall through to empty composer */ }
 
     return () => {
       if (isOwner) {
-        // Primary composer saves its DOM and releases the lease.
-        const current = el.innerHTML;
+        // Primary composer saves its DOM + attachments and releases the lease.
+        const html = el.innerHTML;
         const hasText = Boolean(el.textContent?.trim());
+        const pendingAttachments = attachmentsRef.current;
+        const blob: DraftBlobV1 = {
+          v: DRAFT_BLOB_VERSION,
+          html: hasText ? html : "",
+          attachments: pendingAttachments,
+        };
+        const hasAnything = hasText || pendingAttachments.length > 0;
         try {
-          if (current && hasText) {
-            localStorage.setItem(draftStorageKey(draftKey), current);
+          if (hasAnything) {
+            localStorage.setItem(draftStorageKey(draftKey), JSON.stringify(blob));
           } else {
             localStorage.removeItem(draftStorageKey(draftKey));
           }
-        } catch { /* ignore */ }
+        } catch { /* ignore — quota exceeded silently drops the draft */ }
         draftKeyOwners.delete(draftKey);
       }
       // Non-owners restore only, so nothing to persist on unmount — avoids
