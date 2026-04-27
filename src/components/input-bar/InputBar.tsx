@@ -333,6 +333,12 @@ export const InputBar = memo(function InputBar({
         const hasText = Boolean(el.textContent?.trim());
         hasContentRef.current = hasText;
         setHasContent(hasText);
+      } else {
+        // New session has no saved draft — clear the DOM so leftover text
+        // from the previous session's composer doesn't appear here.
+        el.innerHTML = "";
+        hasContentRef.current = false;
+        setHasContent(false);
       }
     } catch { /* ignore — fall through to empty composer */ }
 
