@@ -112,10 +112,6 @@ export function AppLayout() {
     if (!session) return;
     void cli.stop(session.id);
   }, [cli, manager.activeSession]);
-  const handleCliSendToPty = useCallback((text: string) => {
-    if (!cli.state?.terminalId) return;
-    void window.claude.terminal.write(cli.state.terminalId, text + "\r");
-  }, [cli.state?.terminalId]);
   const {
     agents, selectedAgent, saveAgent, deleteAgent, handleAgentChange, lockedEngine, lockedAgentId,
   } = agentState;
@@ -1536,29 +1532,31 @@ export function AppLayout() {
                   background: topFadeBackground,
                 }}
               />
-              <div
-                className="chat-titlebar-bg pointer-events-none absolute inset-x-0 top-0 z-10"
-                style={{ background: titlebarSurfaceColor }}
-              >
-                <ChatHeader
-                  islandLayout={isIsland}
-                  sidebarOpen={sidebar.isOpen}
-                  showSidebarToggle={true}
-                  isProcessing={manager.isProcessing}
-                  model={activePaneCtrl?.paneHeaderModel}
-                  sessionId={manager.sessionInfo?.sessionId}
-                  totalCost={manager.totalCost}
-                  title={manager.activeSession?.title}
-                  titleGenerating={manager.activeSession?.titleGenerating}
-                  planMode={activePaneCtrl?.panePlanMode ?? settings.planMode}
-                  permissionMode={activePaneCtrl?.panePermissionMode}
-                  acpPermissionBehavior={manager.activeSession?.engine === "acp" ? settings.acpPermissionBehavior : undefined}
-                  onToggleSidebar={sidebar.toggle}
-                  showDevFill={devFillEnabled}
-                  onSeedDevExampleConversation={manager.seedDevExampleConversation}
-                  onSeedDevExampleSpaceData={handleSeedDevExampleSpaceData}
-                />
-              </div>
+              {!isCliEngine && (
+                <div
+                  className="chat-titlebar-bg pointer-events-none absolute inset-x-0 top-0 z-10"
+                  style={{ background: titlebarSurfaceColor }}
+                >
+                  <ChatHeader
+                    islandLayout={isIsland}
+                    sidebarOpen={sidebar.isOpen}
+                    showSidebarToggle={true}
+                    isProcessing={manager.isProcessing}
+                    model={activePaneCtrl?.paneHeaderModel}
+                    sessionId={manager.sessionInfo?.sessionId}
+                    totalCost={manager.totalCost}
+                    title={manager.activeSession?.title}
+                    titleGenerating={manager.activeSession?.titleGenerating}
+                    planMode={activePaneCtrl?.panePlanMode ?? settings.planMode}
+                    permissionMode={activePaneCtrl?.panePermissionMode}
+                    acpPermissionBehavior={manager.activeSession?.engine === "acp" ? settings.acpPermissionBehavior : undefined}
+                    onToggleSidebar={sidebar.toggle}
+                    showDevFill={devFillEnabled}
+                    onSeedDevExampleConversation={manager.seedDevExampleConversation}
+                    onSeedDevExampleSpaceData={handleSeedDevExampleSpaceData}
+                  />
+                </div>
+              )}
               {chatSearchOpen && (
                 <ChatSearchBar
                   messages={manager.messages}
@@ -1573,8 +1571,6 @@ export function AppLayout() {
                   onPtyDataObserved={cli.markReady}
                   onRetry={handleCliRetry}
                   onClose={handleCliClose}
-                  onSendToPty={handleCliSendToPty}
-                  draftKey={manager.activeSessionId ?? "cli-draft"}
                 />
               ) : (
                 <ChatView
